@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
                                QPushButton, QComboBox, QTextEdit, QProgressBar,
-                               QTabWidget, QStackedWidget, QFormLayout, QFrame, QCheckBox)
+                               QTabWidget, QStackedWidget, QFormLayout, QGridLayout,
+                               QFrame, QCheckBox, QSizePolicy)
 from PySide6.QtCore import Qt
 
 # ==========================================
@@ -40,7 +41,7 @@ class DragDropLineEdit(QLineEdit):
 class Ui_MainWindow:
     def setupUi(self, main_window):
         main_window.setWindowTitle("AutoEventTracker - 統合テストスイート")
-        main_window.setFixedSize(840, 820)
+        main_window.setFixedSize(900, 860)
 
         self.stacked_widget = QStackedWidget()
         main_window.setCentralWidget(self.stacked_widget)
@@ -190,28 +191,55 @@ class Ui_MainWindow:
         exec_header.addWidget(self.chk_headless, stretch=1)
         layout.addLayout(exec_header)
 
+        # 💡 情報カード：右端ギリギリまで広がり、文字の下部が切れないレイアウト
         self.info_frame = QFrame()
         self.info_frame.setObjectName("infoFrame")
-        info_layout = QFormLayout(self.info_frame)
-        info_layout.setContentsMargins(18, 18, 18, 18)
-        info_layout.setSpacing(12)
-
-        self.lbl_info_name = QLabel("-")
-        self.lbl_info_url = QLabel("-")
-        self.lbl_info_url.setObjectName("infoUrlLabel")
-        self.lbl_info_memo = QLabel("-")
-        self.lbl_info_memo.setWordWrap(True)
+        self.info_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        
+        info_layout = QGridLayout(self.info_frame)
+        info_layout.setContentsMargins(20, 18, 20, 18)
+        info_layout.setHorizontalSpacing(16)
+        info_layout.setVerticalSpacing(16)
+        
+        # ラベル列の幅を固定し、右側の値列をカード右端までストレッチ
+        info_layout.setColumnStretch(0, 0)
+        info_layout.setColumnStretch(1, 1)
 
         lbl_i1 = QLabel("📝 シナリオ名 (ID):")
         lbl_i1.setProperty("class", "bold-label")
+        lbl_i1.setFixedWidth(130)
+
         lbl_i2 = QLabel("🔗 開始 URL:")
         lbl_i2.setProperty("class", "bold-label")
+        lbl_i2.setFixedWidth(130)
+
         lbl_i3 = QLabel("💬 メモ / 概要:")
         lbl_i3.setProperty("class", "bold-label")
+        lbl_i3.setFixedWidth(130)
 
-        info_layout.addRow(lbl_i1, self.lbl_info_name)
-        info_layout.addRow(lbl_i2, self.lbl_info_url)
-        info_layout.addRow(lbl_i3, self.lbl_info_memo)
+        # 値ラベル：セル幅いっぱいに引き伸ばす（alignment 引数を外す）
+        self.lbl_info_name = QLabel("-")
+        self.lbl_info_name.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        
+        self.lbl_info_url = QLabel("-")
+        self.lbl_info_url.setObjectName("infoUrlLabel")
+        self.lbl_info_url.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.lbl_info_url.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        
+        self.lbl_info_memo = QLabel("-")
+        self.lbl_info_memo.setObjectName("infoMemoLabel")
+        self.lbl_info_memo.setWordWrap(True)
+        self.lbl_info_memo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
+        # グリッドへ配置（右側ラベルは横幅いっぱいに拡張）
+        info_layout.addWidget(lbl_i1, 0, 0, Qt.AlignTop)
+        info_layout.addWidget(self.lbl_info_name, 0, 1)
+
+        info_layout.addWidget(lbl_i2, 1, 0, Qt.AlignTop)
+        info_layout.addWidget(self.lbl_info_url, 1, 1)
+
+        info_layout.addWidget(lbl_i3, 2, 0, Qt.AlignTop)
+        info_layout.addWidget(self.lbl_info_memo, 2, 1)
 
         layout.addWidget(self.info_frame)
 
