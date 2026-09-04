@@ -1,0 +1,343 @@
+import os
+import sys
+import json
+import urllib.parse
+from datetime import datetime
+from openpyxl import load_workbook
+from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+
+def load_project_config(project_dir):
+    config_path = os.path.join(project_dir, "config.json")
+    default_config = {
+        "client_name": "クライアント名未設定",
+        "task_name": "課題名未設定",
+        "excel_setting": {
+            "font_name": "游ゴシック",
+            "theme_color_new": "E2EFDA",
+            "theme_color_old": "FFF2CC",
+            "diff_color": "FFC7CE",
+            "diff_font_color": "9C0006"
+        },
+        "extraction_rules": {
+            "ignore_params": ["_ts", "gtm_auth", "gjid", "gtm", "requestId", "configId"],
+            "nested_separator": "."
+        }
+    }
+    
+    if os.path.exists(config_path):
+        with open(config_path, "r", encoding="utf-8") as f:
+            user_config = json.load(f)
+            if "excel_setting" in user_config:
+                default_config["excel_setting"].update(user_config["excel_setting"])
+            if "extraction_rules" in user_config:
+                default_config["extraction_rules"].update(user_config["extraction_rules"])
+            default_config.update({k: v for k, v in user_config.items() if k not in ["excel_setting", "extraction_rules"]})
+            
+    return default_config
+
+def replace_placeholders_in_sheet(ws, config):
+    today_str = datetime.now().strftime("%Y年%m月%d日")
+    placeholders = {
+        "{client_name}": config.get("client_name", ""),
+        "{task_name}": config.get("task_name", ""),
+        "{date}": today_str
+    }
+    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
+        for cell in row:
+            if cell.value and isinstance(cell.value, str):
+                val_str = cell.value
+                for placeholder, actual_value in placeholders.items():
+                    if placeholder in val_str:
+                        val_str = val_str.replace(placeholder, actual_value)
+                cell.value = val_str
+
+def parse_ga4_query_string(raw_str):
+    if not raw_str or not isinstance(raw_str, str): return {}
+    if "?" in raw_str: raw_str = raw_str.split("?")[-1]
+    params = {}
+    for pair in raw_str.split("&"):
+        if "=" in pair:
+            k, v = pair.split("=", 1)
+            params[k] = urllib.parse.unquote(v)
+    return params
+
+def get_nested_value(d, path, separator="."):
+    if not d or not isinstance(d, dict): return None
+    keys = path.split(separator)
+    current = d
+    for key in keys:
+        if isinstance(current, dict) and key in current: current = current[key]
+        else: return None
+    return current
+
+def search_value_by_mappings(packet, m_row):
+    if not packet or not isinstance(packet, dict): return None
+    events = packet.get("xdm_payload", {}).get("events", [])
+    if not events: return None
+    first_event = events[0]
+    
+    analytics_data = first_event.get("data", {}).get("__adobe", {}).get("analytics", {})
+    
+    if m_row["data_path"]:
+        val = get_nested_value(first_event, m_row["data_path"])
+        if val is not None: return val
+        
+    if m_row["xdm_path"]:
+        p = m_row["xdm_path"]
+        full_xdm_path = p if p.startswith("xdm.") else f"xdm.{p}"
+        val = get_nested_value(first_event, full_xdm_path)
+        if val is not None: return val
+        
+    if m_row["tool_name"] and m_row["tool_name"] in analytics_data:
+        return analytics_data[m_row["tool_name"]]
+        
+    if m_row["aa_key"] and m_row["aa_key"] in analytics_data:
+        return analytics_data[m_row["aa_key"]]
+        
+    xdm_data = first_event.get("xdm", {})
+    check_key = m_row["aa_key"] or m_row["tool_name"]
+    if check_key == "g" or check_key.lower() == "page url":
+        return xdm_data.get("web", {}).get("webPageDetails", {}).get("URL", None)
+    elif check_key == "r" or check_key.lower() == "referrer":
+        return xdm_data.get("web", {}).get("webReferrer", {}).get("URL", None)
+    elif check_key == "pageName" or check_key.lower() == "page name":
+        return xdm_data.get("web", {}).get("webPageDetails", {}).get("name", None)
+    elif check_key == "events":
+        return analytics_data.get("events", xdm_data.get("eventType", None))
+        
+    return None
+
+def format_extracted_value(val):
+    if val is None: return ""
+    if isinstance(val, (dict, list)): return json.dumps(val, ensure_ascii=False)
+    return str(val)
+
+# 💡 GUIからログを中継するための `logger_func` と、フルパス対応を追加！
+def generate_compare_report(project_name, latest_json_path, base_json_path, output_excel_name, logger_func=print):
+    project_dir = os.path.join("project", project_name)
+    template_path = os.path.join(project_dir, "template.xlsx")
+    
+    # 💡 パスがフルパスで渡された場合（GUI）と、ファイル名のみで渡された場合（CUI）の両方に対応
+    l_path = latest_json_path if os.path.isabs(latest_json_path) else os.path.join(project_dir, "outputs", latest_json_path)
+    b_path = base_json_path if os.path.isabs(base_json_path) else os.path.join(project_dir, "outputs", base_json_path)
+    output_excel_path = os.path.join(project_dir, "outputs", output_excel_name)
+
+    config = load_project_config(project_dir)
+    ex_set = config["excel_setting"]
+    ext_rules = config["extraction_rules"]
+    
+    # 💡 print() の代わりに logger_func() を使って画面に文字を送る
+    if not os.path.exists(template_path): return logger_func(f"❌ テンプレートが無い: {template_path}")
+    if not os.path.exists(l_path): return logger_func(f"❌ 最新JSONが無い: {l_path}")
+    if not os.path.exists(b_path): return logger_func(f"❌ 過去JSONが無い: {b_path}")
+
+    try:
+        with open(l_path, "r", encoding="utf-8") as f: latest_data = json.load(f)
+        with open(b_path, "r", encoding="utf-8") as f: base_data = json.load(f)
+    except json.JSONDecodeError:
+        return logger_func("❌ JSONファイルの読み込みに失敗しました。ファイルが壊れていないか確認してください。")
+
+    latest_events = latest_data.get("events", [])
+    base_events = base_data.get("events", [])
+    
+    all_events = latest_events + base_events
+    is_ga4 = any(ev.get("type") == "GA4" or "tid=G-" in str(ev.get("raw", "")) for ev in all_events)
+    sheet_target = "GA4" if is_ga4 else "Adobe Analytics"
+
+    wb = load_workbook(template_path)
+    if sheet_target not in wb.sheetnames: return logger_func(f"❌ シート『{sheet_target}』がありません")
+    ws = wb[sheet_target]
+    
+    for name in list(wb.sheetnames):
+        if name not in ["表紙", sheet_target]: wb.remove(wb[name])
+
+    if "表紙" in wb.sheetnames: replace_placeholders_in_sheet(wb["表紙"], config)
+    replace_placeholders_in_sheet(ws, config)
+
+    START_DATA_COL = 1
+    while ws.cell(row=2, column=START_DATA_COL).value:
+        START_DATA_COL += 1
+
+    mapping_rows = []
+    url_row_idx = None
+
+    for r in range(3, ws.max_row + 1):
+        if START_DATA_COL == 4:
+            aa_key = str(ws.cell(row=r, column=1).value or "").strip()
+            tool_name = str(ws.cell(row=r, column=2).value or "").strip()
+            desc = str(ws.cell(row=r, column=3).value or "").strip()
+            xdm_path, data_path = "", ""
+        else:
+            aa_key = str(ws.cell(row=r, column=1).value or "").strip()
+            xdm_path = str(ws.cell(row=r, column=2).value or "").strip()
+            data_path = str(ws.cell(row=r, column=3).value or "").strip()
+            tool_name = str(ws.cell(row=r, column=4).value or "").strip()
+            desc = str(ws.cell(row=r, column=5).value or "").strip()
+            
+        if aa_key or tool_name:
+            mapping_rows.append({
+                "row_idx": r, "aa_key": aa_key, "tool_name": tool_name,
+                "xdm_path": xdm_path, "data_path": data_path, "desc": desc
+            })
+            if not url_row_idx and (aa_key in ["g", "dl"] or "url" in tool_name.lower()):
+                url_row_idx = r
+
+    max_cols = max(len(latest_events), len(base_events))
+    if max_cols == 0: return logger_func("⚠️ パケットデータが空です")
+
+    OLD_START_ROW = 2 + len(mapping_rows) + 4
+    fills = {
+        "new": PatternFill(start_color=ex_set["theme_color_new"], end_color=ex_set["theme_color_new"], fill_type="solid"),
+        "old": PatternFill(start_color=ex_set["theme_color_old"], end_color=ex_set["theme_color_old"], fill_type="solid"),
+        "diff": PatternFill(start_color=ex_set["diff_color"], end_color=ex_set["diff_color"], fill_type="solid"),
+        "empty": PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+    }
+    fonts = {
+        "diff": Font(name=ex_set["font_name"], bold=True, color=ex_set["diff_font_color"], size=9),
+        "normal": Font(name=ex_set["font_name"], size=9),
+        "header": Font(name=ex_set["font_name"], bold=True, size=10)
+    }
+    thin_border = Border(left=Side(style='thin', color='CCCCCC'), right=Side(style='thin', color='CCCCCC'),
+                         top=Side(style='thin', color='CCCCCC'), bottom=Side(style='thin', color='CCCCCC'))
+
+    # ファイル名表示（フルパスからファイル名だけを抽出）
+    TITLE_COL = 4
+    ws.cell(row=1, column=TITLE_COL, value=f"▼ 【 現在データ (新) 】 📄 ファイル: {os.path.basename(latest_json_path)}").font = Font(name=ex_set["font_name"], bold=True, size=11, color="2E6930")
+    ws.cell(row=OLD_START_ROW - 1, column=TITLE_COL, value=f"▼ 【 過去データ (旧) 】 📄 ファイル: {os.path.basename(base_json_path)}").font = Font(name=ex_set["font_name"], bold=True, size=11, color="4B6F96")
+
+    for idx, m_row in enumerate(mapping_rows):
+        target_old_row = OLD_START_ROW + 1 + idx
+        for col_i in range(1, START_DATA_COL):
+            orig_val = ws.cell(row=m_row["row_idx"], column=col_i).value
+            c_target = ws.cell(row=target_old_row, column=col_i, value=orig_val)
+            c_target.font = fonts["normal"]
+            c_target.fill = PatternFill(start_color="FAFAF7", end_color="FAFAF7", fill_type="solid")
+            c_target.border = thin_border
+
+    for c_idx in range(max_cols):
+        col_num = START_DATA_COL + c_idx
+        p_label = f"Packet-{c_idx + 1}"
+        
+        for cell_h, fill_h in [(ws.cell(row=2, column=col_num, value=p_label), fills["new"]),
+                               (ws.cell(row=OLD_START_ROW, column=col_num, value=p_label), fills["old"])]:
+            cell_h.font = fonts["header"]
+            cell_h.fill = fill_h
+            cell_h.alignment = Alignment(horizontal="center", vertical="center")
+            cell_h.border = thin_border
+
+        packet_new = latest_events[c_idx] if c_idx < len(latest_events) else None
+        packet_old = base_events[c_idx] if c_idx < len(base_events) else None
+
+        if is_ga4:
+            parsed_new = parse_ga4_query_string(packet_new.get("raw", "")) if packet_new else {}
+            parsed_old = parse_ga4_query_string(packet_old.get("raw", "")) if packet_old else {}
+
+        for idx, m_row in enumerate(mapping_rows):
+            row_new = m_row["row_idx"]
+            row_old = OLD_START_ROW + 1 + idx
+            
+            val_new = val_old = ""
+            
+            if is_ga4:
+                if packet_new and m_row["aa_key"] in parsed_new: val_new = parsed_new[m_row["aa_key"]]
+                if packet_old and m_row["aa_key"] in parsed_old: val_old = parsed_old[m_row["aa_key"]]
+            else:
+                res_new = search_value_by_mappings(packet_new, m_row)
+                res_old = search_value_by_mappings(packet_old, m_row)
+                if res_new is not None: val_new = format_extracted_value(res_new)
+                if res_old is not None: val_old = format_extracted_value(res_old)
+
+            c_new = ws.cell(row=row_new, column=col_num, value=val_new)
+            c_old = ws.cell(row=row_old, column=col_num, value=val_old)
+            for c in [c_new, c_old]:
+                c.font = fonts["normal"]
+                c.border = thin_border
+                c.alignment = Alignment(horizontal="left", vertical="center")
+
+            is_ignored = m_row["aa_key"] in ext_rules["ignore_params"]
+
+            if (c_idx >= len(latest_events)) and (c_idx < len(base_events)):
+                c_new.fill = fills["empty"]
+                c_new.value = "❌ パケット欠損"
+                if not is_ignored and val_old != "": c_old.fill = fills["diff"]
+            elif (c_idx < len(latest_events)) and (c_idx >= len(base_events)):
+                if not is_ignored and val_new != "": c_new.fill = fills["diff"]
+                c_old.fill = fills["empty"]
+                c_old.value = "⚠️ 過去になし"
+            elif val_new != val_old:
+                if not is_ignored:
+                    if val_new != "": c_new.fill = fills["diff"]; c_new.font = fonts["diff"]
+                    if val_old != "": c_old.fill = fills["diff"]
+
+    for c_idx in range(1, 4):
+        ws.column_dimensions[get_column_letter(c_idx)].hidden = True
+
+    ws.row_dimensions.group(3, 2 + len(mapping_rows), hidden=False, outline_level=1)
+    ws.row_dimensions.group(OLD_START_ROW + 1, OLD_START_ROW + len(mapping_rows), hidden=False, outline_level=1)
+
+    for idx, m_row in enumerate(mapping_rows):
+        row_new = m_row["row_idx"]
+        row_old = OLD_START_ROW + 1 + idx
+        is_empty_row = True
+        
+        for c_idx in range(max_cols):
+            col_num = START_DATA_COL + c_idx
+            v_new = str(ws.cell(row=row_new, column=col_num).value or "").strip()
+            v_old = str(ws.cell(row=row_old, column=col_num).value or "").strip()
+            
+            if (v_new and v_new not in ["❌ パケット欠損", "⚠️ 過去になし"]) or \
+               (v_old and v_old not in ["❌ パケット欠損", "⚠️ 過去になし"]):
+                is_empty_row = False
+                break
+                
+        if is_empty_row:
+            ws.row_dimensions[row_new].hidden = True
+            ws.row_dimensions[row_old].hidden = True
+
+    if url_row_idx:
+        start_col_grp = START_DATA_COL
+        current_url = str(ws.cell(row=url_row_idx, column=START_DATA_COL).value or "").strip()
+        
+        for c_idx in range(1, max_cols):
+            col_num = START_DATA_COL + c_idx
+            url_val = str(ws.cell(row=url_row_idx, column=col_num).value or "").strip()
+            
+            if url_val != current_url:
+                if col_num - 1 > start_col_grp:
+                    for grp_col in range(start_col_grp + 1, col_num):
+                        col_letter = get_column_letter(grp_col)
+                        ws.column_dimensions[col_letter].outline_level = 1
+                start_col_grp = col_num
+                current_url = url_val
+                
+        if (START_DATA_COL + max_cols - 1) > start_col_grp:
+            for grp_col in range(start_col_grp + 1, START_DATA_COL + max_cols):
+                col_letter = get_column_letter(grp_col)
+                ws.column_dimensions[col_letter].outline_level = 1
+
+    for col in ws.iter_cols(min_col=START_DATA_COL, max_col=max_cols + START_DATA_COL - 1):
+        max_len = max(len(str(cell.value or '')) for cell in col)
+        ws.column_dimensions[col[0].column_letter].width = min(max(max_len + 3, 12), 40)
+
+    ws.sheet_properties.outlinePr.summaryRight = False
+    ws.sheet_properties.outlinePr.summaryBelow = False
+
+    try:
+        wb.save(output_excel_path)
+    except PermissionError:
+        logger_func(f"❌ 【エラー】出力先のExcelファイル ({output_excel_name}) が開かれています。\nExcelを閉じてから再度実行してください。\n")
+        return None
+
+    logger_func(f"🎉 比較レポートが完成しました！\n📊 保存先: {output_excel_path}\n")
+    
+    # 💡 成功時は、画面(GUI)側でファイルを開けるようにパスを返す
+    return output_excel_path
+
+# CUI（コマンドライン）から実行された場合のエントリーポイント
+if __name__ == "__main__":
+    if len(sys.argv) > 4:
+        generate_compare_report(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])
+    else:
+        print("💡 使い方: python excel_reporter.py [案件名] [最新JSON名] [過去JSON名] [出力Excel名]")
+        print("💡 画面(GUI)を起動する場合は、 python gui_qt.py を実行してください。")
