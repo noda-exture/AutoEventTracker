@@ -79,6 +79,11 @@ class Ui_MainWindow:
         self.combo_proj = QComboBox()
         proj_layout.addWidget(self.combo_proj)
 
+        self.btn_edit_proj = QPushButton("✏️ プロジェクト設定編集")
+        self.btn_edit_proj.setObjectName("secondaryBtn")
+        self.btn_edit_proj.setCursor(Qt.PointingHandCursor)
+        proj_layout.addWidget(self.btn_edit_proj)
+
         self.btn_create_proj = QPushButton("＋ プロジェクト新規作成")
         self.btn_create_proj.setObjectName("successBtn")
         self.btn_create_proj.setCursor(Qt.PointingHandCursor)
@@ -266,12 +271,21 @@ class Ui_MainWindow:
         self.txt_scenario_file_auto.setPlaceholderText("例: my_scenario.json")
         layout.addWidget(self.txt_scenario_file_auto)
 
-        lbl_s2 = QLabel("② 開始URL (このURLから自動記録ブラウザを立ち上げます):")
+        lbl_s2 = QLabel("② 開始URL (自動記録ブラウザを立ち上げるURL):")
         lbl_s2.setProperty("class", "bold-label")
         layout.addWidget(lbl_s2)
 
-        self.txt_url_auto = QLineEdit("https://www.sonysonpo.co.jp/")
+        self.txt_url_auto = QLineEdit()
+        self.txt_url_auto.setPlaceholderText("例: https://shop.example.com/")
         layout.addWidget(self.txt_url_auto)
+
+        lbl_s3 = QLabel("③ メモ / 概要 (任意):")
+        lbl_s3.setProperty("class", "bold-label")
+        layout.addWidget(lbl_s3)
+
+        self.txt_memo_auto = QLineEdit()
+        self.txt_memo_auto.setPlaceholderText("例: 新規会員登録から購入完了までの正常系フロー")
+        layout.addWidget(self.txt_memo_auto)
 
         layout.addSpacing(6)
         self.btn_record_auto = QPushButton("⏺️ 記録開始 (ブラウザを操作して閉じるだけで自動保存)")
@@ -291,7 +305,7 @@ class Ui_MainWindow:
         return tab
 
     # ------------------------------------------
-    # ✨ プロジェクト作成画面 (ページ 1)
+    # ✨ プロジェクト作成・編集 兼用画面 (ページ 1)
     # ------------------------------------------
     def _setup_create_project_page(self):
         create_widget = QWidget()
@@ -300,13 +314,13 @@ class Ui_MainWindow:
         layout.setAlignment(Qt.AlignTop)
         layout.setSpacing(16)
 
-        title = QLabel("✨ 新規プロジェクトを作成")
-        title.setObjectName("sectionTitle")
-        layout.addWidget(title)
+        self.lbl_page_title = QLabel("✨ 新規プロジェクトを作成")
+        self.lbl_page_title.setObjectName("sectionTitle")
+        layout.addWidget(self.lbl_page_title)
         
-        desc = QLabel("案件用のフォルダ構成と基本設定ファイル（config.json）を自動生成します。")
-        desc.setObjectName("descLabel")
-        layout.addWidget(desc)
+        self.lbl_page_desc = QLabel("案件用のフォルダ構成と基本設定ファイル（config.json）を自動生成します。")
+        self.lbl_page_desc.setObjectName("descLabel")
+        layout.addWidget(self.lbl_page_desc)
 
         form_frame = QFrame()
         form_frame.setObjectName("formFrame")
@@ -314,14 +328,21 @@ class Ui_MainWindow:
         form_layout.setContentsMargins(24, 24, 24, 24)
         form_layout.setSpacing(18)
 
+        # ラベル側の幅を適切に確保し、入力フィールドが横に広がるように FieldGrowthPolicy を設定
+        form_layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+
         self.input_proj_id = QLineEdit()
-        self.input_proj_id.setPlaceholderText("例: sonysonpo_2026")
+        self.input_proj_id.setPlaceholderText("例: my_project_2026")
+        # 横幅がいっぱいまで広がるようにポリシーを設定
+        self.input_proj_id.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         self.input_client = QLineEdit()
-        self.input_client.setPlaceholderText("例: ソニー損保 様")
+        self.input_client.setPlaceholderText("例: 株式会社サンプル 様")
+        self.input_client.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         self.input_task = QLineEdit()
-        self.input_task.setPlaceholderText("例: GA4リプレイスに伴うパケット検証")
+        self.input_task.setPlaceholderText("例: カート追加イベントのパケット検証")
+        self.input_task.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         lbl_p1 = QLabel("フォルダ名 (英数字推奨):")
         lbl_p1.setProperty("class", "bold-label")
@@ -336,8 +357,36 @@ class Ui_MainWindow:
 
         layout.addWidget(form_frame)
 
+        # --- テンプレート操作枠 (編集時のみ表示させる用) ---
+        self.tpl_frame = QFrame()
+        self.tpl_frame.setObjectName("infoFrame")
+        tpl_layout = QVBoxLayout(self.tpl_frame)
+        tpl_layout.setContentsMargins(24, 20, 24, 20)
+        
+        tpl_title = QLabel("📄 テンプレート Excel の設定")
+        tpl_title.setProperty("class", "bold-label")
+        tpl_layout.addWidget(tpl_title)
+
+        tpl_desc = QLabel(
+            "このプロジェクト独自の比較フォーマットを使用する場合、フォルダに template.xlsx を配置します。\n"
+            "※ Excel内のセルに {{CLIENT_NAME}}, {{TASK_NAME}}, {{PROJECT_ID}}, {{RUN_DATE}} と書くと、レポート生成時に自動置換されます。"
+        )
+        tpl_desc.setObjectName("descLabel")
+        tpl_layout.addWidget(tpl_desc)
+
+        self.btn_open_template = QPushButton("📂 template.xlsx を開く / 確認する")
+        self.btn_open_template.setObjectName("secondaryBtn")
+        self.btn_open_template.setCursor(Qt.PointingHandCursor)
+        tpl_layout.addWidget(self.btn_open_template, 0, Qt.AlignLeft)
+        
+        self.tpl_frame.setVisible(False) # 初期は非表示
+        layout.addWidget(self.tpl_frame)
+
+        # --- ボタン ---
+        layout.addSpacing(16)
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(12)
+        
         self.btn_cancel_proj = QPushButton("キャンセル")
         self.btn_cancel_proj.setObjectName("secondaryBtn")
         self.btn_cancel_proj.setCursor(Qt.PointingHandCursor)

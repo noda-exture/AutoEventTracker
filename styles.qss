@@ -1,7 +1,7 @@
 /* ==========================================AutoEventTracker - Modern Clean Theme (QSS)========================================== */
 /* --- 全体基本設定 --- */
 QWidget {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+  font-family: BlinkMacSystemFont, "Segoe UI", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
   color: #1E293B;
   background-color: transparent;
   font-size: 13px;
@@ -326,4 +326,28 @@ QScrollBar::sub-line:vertical {
 QScrollBar::add-page:vertical,
 QScrollBar::sub-page:vertical {
   background: none;
+}
+
+/* --- メッセージボックス (ダイアログ) --- */
+QMessageBox {
+  background-color: #FFFFFF;
+}
+
+QMessageBox QLabel {
+  color: #1E293B;
+  /* テキストをダークカラーに強制 */
+  background-color: transparent;
+}
+
+QMessageBox QPushButton {
+  background-color: #2563EB;
+  /* デフォルトボタンを青色に */
+  color: #FFFFFF;
+  border-radius: 6px;
+  padding: 6px 16px;
+  min-width: 60px;
+}
+
+QMessageBox QPushButton:hover {
+  background-color: #1D4ED8;
 }

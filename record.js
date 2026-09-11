@@ -10,6 +10,7 @@ chromium.use(stealth);
 const proj = process.argv[2];
 const fileName = process.argv[3];
 const startUrl = process.argv[4];
+const inputMemo = process.argv[5]; // 💡 Pythonから渡されたメモを受け取る
 
 if (!proj || !fileName || !startUrl) {
   console.error('❌ エラー: 引数が不足しています。(project, fileName, startUrl)');
@@ -19,108 +20,99 @@ if (!proj || !fileName || !startUrl) {
 // 記録用のステップ配列
 let steps = [];
 let windowCounter = 1;
-let openPages = new Set(); // アクティブなページオブジェクトを直接セットで保持
 
 (async () => {
   console.log(`🚀 レコーダーを起動します...`);
   console.log(`🔗 対象URL: ${startUrl}`);
 
-  let browser;
+  const browser = await chromium.launch({ headless: false });
+  const context = await browser.newContext();
 
-  // 💡 保存処理を行う共通関数
-  let isSaved = false;
-  const saveScenarioAndExit = async () => {
-    if (isSaved) return;
-    isSaved = true;
+  // 💡 Python/Node間で情報をやり取りするためのバインディング関数
+  await context.exposeFunction('notifyNodeEvent', (eventData) => {
+    let memo = `${eventData.tag} を操作`;
+    if (eventData.text) memo += ` (${eventData.text})`;
 
-    console.log(`\n🛑 ブラウザの終了を検知しました。シナリオを保存します...`);
-    
-    const scenarioDir = path.join(__dirname, 'project', proj, 'scenario');
-    if (!fs.existsSync(scenarioDir)) {
-      fs.mkdirSync(scenarioDir, { recursive: true });
-    }
-    
-    const safeFileName = fileName.endsWith('.json') ? fileName : `${fileName}.json`;
-    const savePath = path.join(scenarioDir, safeFileName);
-    
-    const outputData = {
-      scenario_name: safeFileName.replace('.json', ''),
-      start_url: startUrl,
-      memo: "✅ 自動レコーダーによってキャプチャされたシナリオ",
-      steps: steps
+    let step = {
+      action: eventData.action,
+      selector: eventData.selector,
+      memo: memo,
     };
-    
-    try {
-      fs.writeFileSync(savePath, JSON.stringify(outputData, null, 2), 'utf-8');
-      console.log(`✨ 保存成功: ${savePath}`);
-    } catch (err) {
-      console.error(`❌ 保存エラー: ${err.message}`);
-    } finally {
-      if (browser && browser.isConnected()) {
-        console.log('🧹 残存しているブラウザプロセスをクリーンアップします...');
-        await browser.close().catch(() => {});
-      }
-      process.exit(0);
+    if (eventData.value !== undefined) {
+      step.value = eventData.value;
     }
-  };
+    
+    // 直前のステップと全く同じ（重複イベント）なら無視する
+    const lastStep = steps[steps.length - 1];
+    if (lastStep && lastStep.action === step.action && lastStep.selector === step.selector && lastStep.value === step.value) {
+        return;
+    }
 
-  try {
-    browser = await chromium.launch({ headless: false });
-    const context = await browser.newContext();
+    steps.push(step);
+    console.log(`[記録] ${step.action} -> ${step.selector}`);
+  });
 
-    // 💡 Python/Node間で情報をやり取りするためのバインディング関数
-    await context.exposeFunction('notifyNodeEvent', (eventData) => {
-      let memo = `${eventData.tag} を操作`;
-      if (eventData.text) memo += ` (${eventData.text})`;
+  // 💡 新しいページ(タブ/ウィンドウ)が開くたびに監視スクリプトを注入
+  context.on('page', async (newPage) => {
+    // 最初のページ以外なら「別窓切り替えステップ」を自動挿入
+    if (steps.length > 0) {
+      const winName = `page${windowCounter++}`;
+      steps.push({
+        action: 'switch_window',
+        value: winName,
+        memo: `別ウィンドウ [${winName}] へ切り替え`
+      });
+      console.log(`[記録] 🔗 別ウィンドウのオープンを検知しました`);
+    }
 
-      let step = {
-        action: eventData.action,
-        selector: eventData.selector,
-        memo: memo,
-      };
-      if (eventData.value !== undefined) {
-        step.value = eventData.value;
-      }
-      
-      const lastStep = steps[steps.length - 1];
-      if (lastStep && lastStep.action === step.action && lastStep.selector === step.selector && lastStep.value === step.value) {
-          return;
-      }
-
-      steps.push(step);
-      console.log(`[記録] ${step.action} -> ${step.selector}`);
-    });
-
-    // ーーー 🔧 【ここが最大の変更点】今後開くすべてのタブに、一括で監視スクリプトを事前予約する ーーー
-    await context.addInitScript(() => {
+    // クライアント(ブラウザ)側で操作を監視してセレクタを自動構築するスクリプト
+    await newPage.addInitScript(() => {
       if (window.__AUTOREC_INIT) return;
       window.__AUTOREC_INIT = true;
 
+      // 🤖 【改修】より壊れにくく柔軟な文字列セレクタを生成するロジック
       const getSelector = (el) => {
+        // 1. 一意なIDや属性は最優先（変更なし）
         if (el.id) return `[id="${el.id}"]`;
-        if (el.getAttribute('placeholder')) return `[placeholder="${el.getAttribute('placeholder')}"]`;
         if (el.getAttribute('data-testid')) return `[data-testid="${el.getAttribute('data-testid')}"]`;
-        
-        const text = el.innerText ? el.innerText.trim().split('\n')[0] : '';
-        
-        let selectorBase = el.tagName.toLowerCase();
-        if (el.className && typeof el.className === 'string') {
-            const classes = el.className.trim().split(/\s+/).filter(c => !c.startsWith('is-')).join('.');
-            if (classes) selectorBase += '.' + classes;
-        }
-
-        if (text && text.length > 0 && text.length < 40) {
-            return `${selectorBase}:has-text("${text}")`;
-          }
-        
+        if (el.getAttribute('placeholder')) return `[placeholder="${el.getAttribute('placeholder')}"]`;
         if (el.name) return `[name="${el.name}"]`;
-        return selectorBase;
+        if (el.getAttribute('aria-label')) return `${el.tagName.toLowerCase()}[aria-label="${el.getAttribute('aria-label')}"]`;
+        
+        // テキストノードを取得してクリーニング
+        const text = el.innerText ? el.innerText.trim().split('\n')[0].trim() : '';
+        
+        // 2. テキストが存在する場合、厳格な name= ではなく、柔軟な `has-text` (部分一致) を使う
+        if (text && text.length > 0 && text.length < 30) {
+            // ダブルクォーテーションをエスケープ
+            const cleanText = text.replace(/"/g, '\\"');
+            const tag = el.tagName.toLowerCase();
+            
+            if (tag === 'a') return `a:has-text("${cleanText}")`;
+            if (tag === 'button' || el.getAttribute('role') === 'button') return `button:has-text("${cleanText}")`;
+            
+            // a, button, input, select 以外の場合も、タグに紐づけたテキスト検索にする
+            if (tag !== 'select' && tag !== 'input') {
+                return `${tag}:has-text("${cleanText}")`;
+            }
+        }
+        
+        // 3. 最終フォールバック (タグ + 複数クラス名)
+        let pathStr = el.tagName.toLowerCase();
+        if (el.className && typeof el.className === 'string') {
+            const classes = el.className.trim().split(/\s+/).filter(c => c).join('.');
+            if (classes) pathStr += '.' + classes;
+        }
+        return pathStr;
       };
 
+      // クリックイベントの監視
       document.addEventListener('click', (e) => {
+        // Inputフィールドのクリックは文字入力(change)で拾うので除外
         if (e.target.tagName === 'INPUT' && (e.target.type === 'text' || e.target.type === 'password' || e.target.type === 'email')) return;
         if (e.target.tagName === 'SELECT') return;
 
+        // 親を遡って button や a リンクを探す
         let el = e.target;
         while (el && el !== document.body) {
           if (el.tagName === 'A' || el.tagName === 'BUTTON' || el.getAttribute('role') === 'button') break;
@@ -136,6 +128,7 @@ let openPages = new Set(); // アクティブなページオブジェクトを�
         });
       }, true);
 
+      // フォーム入力・選択イベントの監視
       document.addEventListener('change', (e) => {
         const el = e.target;
         const selector = getSelector(el);
@@ -149,7 +142,7 @@ let openPages = new Set(); // アクティブなページオブジェクトを�
           });
         } else if (el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio')) {
           window.notifyNodeEvent({
-            action: 'click',
+            action: 'click', // Playwrightではチェックボックスはclick
             selector: selector,
             tag: 'input'
           });
@@ -163,55 +156,39 @@ let openPages = new Set(); // アクティブなページオブジェクトを�
         }
       }, true);
     });
-    // ーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーーー
+  });
 
-    // 💡 新しいページ(タブ/ウィンドウ)が開くたびに走るイベント監視
-    context.on('page', async (newPage) => {
-      openPages.add(newPage);
+  const page = await context.newPage();
+  await page.goto(startUrl);
 
-      // 最初のページ以外（＝2枚目以降のタブ）なら「別窓切り替えステップ」を挿入
-      if (steps.length > 0) {
-        const winName = `page${windowCounter++}`;
-        steps.push({
-          action: 'switch_window',
-          value: winName,
-          memo: `別ウィンドウ [${winName}] へ切り替え`
-        });
-        console.log(`[記録] 🔗 別ウィンドウのオープンを検知しました: ${winName}`);
-      }
-
-      // タブのクローズ監視（ゾンビ防止）
-      newPage.on('close', async () => {
-        openPages.delete(newPage);
-        console.log(`ℹ️ タブが閉じられました (残りアクティブタブ: ${openPages.size})`);
-        if (openPages.size === 0) {
-          await saveScenarioAndExit();
-        }
-      });
-    });
-
-    const page = await context.newPage();
-    await page.goto(startUrl);
-
-    // バックアップ用：ブラウザオブジェクト自体が切断された場合
-    browser.on('disconnected', async () => {
-      await saveScenarioAndExit();
-    });
-
-    // Python(GUI)側から急にタスクが切断された場合
-    process.on('SIGINT', async () => {
-      console.log('\n⚠️ 外部からの終了シグナルを検知しました。強制終了します...');
-      if (browser) await browser.close().catch(() => {});
-      process.exit(0);
-    });
-
-    // メインプロセスの維持
-    while (browser && browser.isConnected()) {
-      await new Promise(resolve => setTimeout(resolve, 500));
+  // 💡 ブラウザが閉じられた瞬間にJSONを自動保存
+  browser.on('disconnected', () => {
+    console.log(`\n🛑 ブラウザが閉じられました。シナリオを保存します...`);
+    
+    const scenarioDir = path.join(__dirname, 'project', proj, 'scenario');
+    if (!fs.existsSync(scenarioDir)) {
+      fs.mkdirSync(scenarioDir, { recursive: true });
     }
+    
+    const safeFileName = fileName.endsWith('.json') ? fileName : `${fileName}.json`;
+    const savePath = path.join(scenarioDir, safeFileName);
+    
+    // 💡 未入力時はデフォルトの文言をセットする
+    const finalMemo = inputMemo ? inputMemo : "✅ 自動レコーダーによってキャプチャされたシナリオ";
 
-  } catch (globalErr) {
-    console.error(`❌ レコーダー内部で致命的な例外が発生しました: ${globalErr.message}`);
-    await saveScenarioAndExit();
-  }
+    const outputData = {
+      scenario_name: safeFileName.replace('.json', ''),
+      start_url: startUrl,
+      memo: finalMemo,
+      steps: steps
+    };
+    
+    try {
+      fs.writeFileSync(savePath, JSON.stringify(outputData, null, 2), 'utf-8');
+      console.log(`✨ 保存成功: ${savePath}`);
+    } catch (err) {
+      console.error(`❌ 保存エラー: ${err.message}`);
+    }
+  });
+
 })();

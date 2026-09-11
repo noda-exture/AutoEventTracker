@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import shutil
 import threading
 import subprocess
 from datetime import datetime
@@ -73,16 +74,17 @@ class AutoRecordWorker(QThread):
     log = Signal(str)
     finished = Signal(bool)
 
-    def __init__(self, proj, filename, start_url):
+    def __init__(self, proj, filename, start_url, memo):
         super().__init__()
         self.proj = proj
         self.filename = filename
         self.start_url = start_url
+        self.memo = memo
 
     def run(self):
         try:
             process = subprocess.Popen(
-                ["node", "record.js", self.proj, self.filename, self.start_url],
+                ["node", "record.js", self.proj, self.filename, self.start_url, self.memo],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -111,6 +113,9 @@ class AutoTrackerApp(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        self.current_editing_proj = ""
+        self.is_edit_mode = False # 新規作成か編集かを示すフラグ
+
         # UIの読み込みとセットアップ
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
@@ -128,9 +133,11 @@ class AutoTrackerApp(QMainWindow):
 
     def _bind_events(self):
         # 画面切替 / プロジェクト選択
-        self.ui.btn_create_proj.clicked.connect(lambda: self.ui.stacked_widget.setCurrentIndex(1))
+        self.ui.btn_create_proj.clicked.connect(self.open_create_project_page)
+        self.ui.btn_edit_proj.clicked.connect(self.open_edit_project_page)
         self.ui.btn_cancel_proj.clicked.connect(lambda: self.ui.stacked_widget.setCurrentIndex(0))
-        self.ui.btn_confirm_proj.clicked.connect(self.create_project_action)
+        self.ui.btn_confirm_proj.clicked.connect(self.save_project_action)
+        self.ui.btn_open_template.clicked.connect(self.open_template_excel)
 
         self.ui.combo_proj.currentTextChanged.connect(self.update_scenario_list)
         self.ui.combo_scenario.currentTextChanged.connect(self.load_scenario_info)
@@ -156,6 +163,9 @@ class AutoTrackerApp(QMainWindow):
         if projects:
             self.ui.combo_proj.addItems(projects)
             self.update_scenario_list(projects[0])
+            self.ui.btn_edit_proj.setEnabled(True)
+        else:
+            self.ui.btn_edit_proj.setEnabled(False)
 
     def update_scenario_list(self, proj_name):
         self.ui.combo_scenario.clear()
@@ -196,47 +206,159 @@ class AutoTrackerApp(QMainWindow):
             self.ui.lbl_info_url.setText("読み込み失敗")
             self.ui.lbl_info_memo.setText("JSONの解析に失敗したか、ファイルが見つかりません。")
 
-    def create_project_action(self):
+    # ------------------------------------------
+    # ✨ 新規/編集モード切替と保存ロジック
+    # ------------------------------------------
+    def open_create_project_page(self):
+        self.is_edit_mode = False
+        self.ui.lbl_page_title.setText("✨ 新規プロジェクトを作成")
+        self.ui.lbl_page_desc.setText("案件用のフォルダ構成と基本設定ファイル（config.json）を自動生成します。")
+        self.ui.btn_confirm_proj.setText("CREATE (作成)")
+        
+        self.ui.input_proj_id.clear()
+        self.ui.input_client.clear()
+        self.ui.input_task.clear()
+        
+        self.ui.tpl_frame.setVisible(False)
+        self.ui.stacked_widget.setCurrentIndex(1)
+
+    def open_edit_project_page(self):
+        current_proj = self.ui.combo_proj.currentText().strip()
+        if not current_proj:
+            QMessageBox.warning(self, "エラー", "編集対象のプロジェクトが選択されていません。")
+            return
+
+        self.is_edit_mode = True
+        self.current_editing_proj = current_proj
+        
+        self.ui.lbl_page_title.setText("✏️ プロジェクト設定編集")
+        self.ui.lbl_page_desc.setText("選択中プロジェクトの基本情報およびフォルダ名を編集します。")
+        self.ui.btn_confirm_proj.setText("💾 設定を保存・更新する")
+
+        config_path = os.path.join("project", current_proj, "config.json")
+        client_name = ""
+        task_name = ""
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+                    client_name = cfg.get("client_name", "")
+                    task_name = cfg.get("task_name", "")
+            except Exception as e:
+                self.log_write(f"⚠️ config.json 読み込み警告: {str(e)}\n")
+
+        self.ui.input_proj_id.setText(current_proj)
+        self.ui.input_client.setText(client_name)
+        self.ui.input_task.setText(task_name)
+        
+        self.ui.tpl_frame.setVisible(True)
+        self.ui.stacked_widget.setCurrentIndex(1)
+
+    def save_project_action(self):
         proj_id = self.ui.input_proj_id.text().strip()
         client = self.ui.input_client.text().strip() or "クライアント名未設定"
         task = self.ui.input_task.text().strip() or "課題名未設定"
 
         if not proj_id:
-            QMessageBox.warning(self, "エラー", "フォルダ名を入力してください。")
+            QMessageBox.warning(self, "エラー", "フォルダ名 (project_id) は空にできません。")
             return
 
-        proj_dir = os.path.join("project", proj_id)
-        if os.path.exists(proj_dir):
-            QMessageBox.warning(self, "エラー", f"既に '{proj_id}' というプロジェクトが存在します。")
-            return
+        if self.is_edit_mode:
+            # 編集モード
+            old_proj_id = self.current_editing_proj
+            old_dir = os.path.join("project", old_proj_id)
+            new_dir = os.path.join("project", proj_id)
 
-        os.makedirs(os.path.join(proj_dir, "outputs"), exist_ok=True)
-        os.makedirs(os.path.join(proj_dir, "scenario"), exist_ok=True)
-        os.makedirs(os.path.join(proj_dir, "parts"), exist_ok=True)
+            if proj_id != old_proj_id:
+                if os.path.exists(new_dir):
+                    QMessageBox.warning(self, "エラー", f"既に '{proj_id}' というフォルダ名が存在します。別の名前を指定してください。")
+                    return
+                try:
+                    os.rename(old_dir, new_dir)
+                    self.log_write(f"📁 プロジェクトフォルダ名を変更しました: {old_proj_id} -> {proj_id}\n")
+                except Exception as e:
+                    QMessageBox.critical(self, "リネームエラー", f"フォルダ名の変更に失敗しました:\n{str(e)}")
+                    return
 
-        config_data = {
-            "client_name": client,
-            "task_name": task,
-            "excel_setting": {
-                "font_name": "游ゴシック", "theme_color_new": "E2EFDA", "theme_color_old": "FFF2CC", "diff_color": "FFC7CE", "diff_font_color": "9C0006"
-            },
-            "extraction_rules": {
-                "ignore_params": ["_ts", "gtm_auth", "gjid", "gtm", "requestId", "configId"], "nested_separator": "."
+            target_dir = new_dir if proj_id != old_proj_id else old_dir
+            config_path = os.path.join(target_dir, "config.json")
+            config_data = {}
+            if os.path.exists(config_path):
+                try:
+                    with open(config_path, "r", encoding="utf-8") as f:
+                        config_data = json.load(f)
+                except Exception:
+                    config_data = {}
+            
+            config_data["client_name"] = client
+            config_data["task_name"] = task
+
+            try:
+                with open(config_path, "w", encoding="utf-8") as f:
+                    json.dump(config_data, f, indent=4, ensure_ascii=False)
+            except Exception as e:
+                QMessageBox.critical(self, "保存エラー", f"config.json の保存に失敗しました:\n{str(e)}")
+                return
+            
+            self.refresh_project_list()
+            idx = self.ui.combo_proj.findText(proj_id)
+            if idx >= 0: self.ui.combo_proj.setCurrentIndex(idx)
+            QMessageBox.information(self, "保存完了", f"プロジェクト '{proj_id}' の設定を更新しました！")
+
+        else:
+            # 新規作成モード
+            proj_dir = os.path.join("project", proj_id)
+            if os.path.exists(proj_dir):
+                QMessageBox.warning(self, "エラー", f"既に '{proj_id}' というプロジェクトが存在します。")
+                return
+
+            os.makedirs(os.path.join(proj_dir, "outputs"), exist_ok=True)
+            os.makedirs(os.path.join(proj_dir, "scenario"), exist_ok=True)
+            os.makedirs(os.path.join(proj_dir, "parts"), exist_ok=True)
+
+            config_data = {
+                "client_name": client,
+                "task_name": task,
+                "excel_setting": {
+                    "font_name": "游ゴシック", "theme_color_new": "E2EFDA", "theme_color_old": "FFF2CC", "diff_color": "FFC7CE", "diff_font_color": "9C0006"
+                },
+                "extraction_rules": {
+                    "ignore_params": ["_ts", "gtm_auth", "gjid", "gtm", "requestId", "configId"], "nested_separator": "."
+                }
             }
-        }
-        with open(os.path.join(proj_dir, "config.json"), "w", encoding="utf-8") as f:
-            json.dump(config_data, f, indent=4, ensure_ascii=False)
+            with open(os.path.join(proj_dir, "config.json"), "w", encoding="utf-8") as f:
+                json.dump(config_data, f, indent=4, ensure_ascii=False)
 
-        self.ui.input_proj_id.clear()
-        self.ui.input_client.clear()
-        self.ui.input_task.clear()
-        self.refresh_project_list()
-        
-        index = self.ui.combo_proj.findText(proj_id)
-        if index >= 0: self.ui.combo_proj.setCurrentIndex(index)
+            self.refresh_project_list()
+            idx = self.ui.combo_proj.findText(proj_id)
+            if idx >= 0: self.ui.combo_proj.setCurrentIndex(idx)
+            QMessageBox.information(self, "成功", f"プロジェクト '{proj_id}' を作成しました！")
 
-        QMessageBox.information(self, "成功", f"プロジェクト '{proj_id}' を作成しました！")
         self.ui.stacked_widget.setCurrentIndex(0)
+
+    def open_template_excel(self):
+        target_proj = self.ui.input_proj_id.text().strip() or self.current_editing_proj
+        template_path = os.path.abspath(os.path.join("project", target_proj, "template.xlsx"))
+
+        if os.path.exists(template_path):
+            try:
+                if sys.platform == "win32":
+                    os.startfile(template_path)
+                elif sys.platform == "darwin":
+                    subprocess.call(["open", template_path])
+                else:
+                    subprocess.call(["xdg-open", template_path])
+                self.log_write(f"📄 テンプレートファイルを開きました: {template_path}\n")
+            except Exception as e:
+                QMessageBox.critical(self, "実行エラー", f"ファイルを開く際にエラーが発生しました:\n{str(e)}")
+        else:
+            QMessageBox.information(
+                self, 
+                "ファイル未配置", 
+                f"現在 '{target_proj}' には個別の template.xlsx が配置されていません。\n\n"
+                f"配置先パス:\n{template_path}\n\n"
+                "ここにカスタムデザインの template.xlsx を配置すると、突合比較時に優先して読み込まれます。"
+            )
 
     def log_write(self, msg):
         self.ui.txt_log.moveCursor(QTextCursor.End)
@@ -325,6 +447,7 @@ class AutoTrackerApp(QMainWindow):
         proj = self.ui.combo_proj.currentText()
         filename = self.ui.txt_scenario_file_auto.text().strip()
         url = self.ui.txt_url_auto.text().strip()
+        memo = self.ui.txt_memo_auto.text().strip() # 💡 メモフィールドを取得
         
         if not proj:
             QMessageBox.warning(self, "エラー", "対象プロジェクトが選択されていません。")
@@ -344,10 +467,12 @@ class AutoTrackerApp(QMainWindow):
         self.log_write(f"⏳ [{datetime.now().strftime('%H:%M:%S')}] 自動レコーダー を起動します...\n")
         self.log_write(f"🔗 開始URL: {url}\n")
         self.log_write(f"📁 保存先: project/{proj}/scenario/{filename}\n")
+        if memo: self.log_write(f"💬 メモ: {memo}\n")
         self.log_write("==================================================\n")
         self.log_write("💡 起動したブラウザで操作を行い、終わったらブラウザを閉じてください。\n")
         
-        self.record_worker = AutoRecordWorker(proj, filename, url)
+        # 💡 引数にmemoを追加してワーカーを起動
+        self.record_worker = AutoRecordWorker(proj, filename, url, memo)
         self.record_worker.log.connect(self.log_write)
         self.record_worker.finished.connect(lambda s, p=proj: self.on_record_finished(s, p))
         self.record_worker.start()
