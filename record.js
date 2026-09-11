@@ -3,23 +3,22 @@ const stealth = require('puppeteer-extra-plugin-stealth')();
 const fs = require('fs');
 const path = require('path');
 
-// ステルスプラグインを有効化（Bot検知を突破する設定）
+// ステルスプラグインを有効化
 chromium.use(stealth);
 
-// GUI(Python)から渡された引数を受け取る
 const proj = process.argv[2];
 const fileName = process.argv[3];
 const startUrl = process.argv[4];
-const inputMemo = process.argv[5]; // 💡 Pythonから渡されたメモを受け取る
+const inputMemo = process.argv[5] || ""; 
 
 if (!proj || !fileName || !startUrl) {
   console.error('❌ エラー: 引数が不足しています。(project, fileName, startUrl)');
   process.exit(1);
 }
 
-// 記録用のステップ配列
 let steps = [];
 let windowCounter = 1;
+let isSaved = false;
 
 (async () => {
   console.log(`🚀 レコーダーを起動します...`);
@@ -28,7 +27,51 @@ let windowCounter = 1;
   const browser = await chromium.launch({ headless: false });
   const context = await browser.newContext();
 
-  // 💡 Python/Node間で情報をやり取りするためのバインディング関数
+  // 💡 【修正】保存処理を内部に移動し、browser.close() を確実に呼べるようにする
+  const saveScenario = async () => {
+    if (isSaved) return;
+    isSaved = true;
+    
+    console.log(`\n🛑 終了操作を検知しました。シナリオを保存します...`);
+    
+    const scenarioDir = path.join(__dirname, 'project', proj, 'scenario');
+    if (!fs.existsSync(scenarioDir)) {
+      fs.mkdirSync(scenarioDir, { recursive: true });
+    }
+    
+    const safeFileName = fileName.endsWith('.json') ? fileName : `${fileName}.json`;
+    const savePath = path.join(scenarioDir, safeFileName);
+    
+    const finalMemo = inputMemo ? inputMemo : "✅ 自動レコーダーによってキャプチャされたシナリオ";
+
+    const outputData = {
+      scenario_name: safeFileName.replace('.json', ''),
+      start_url: startUrl,
+      memo: finalMemo,
+      steps: steps
+    };
+    
+    try {
+      // ファイルへ書き込み
+      fs.writeFileSync(savePath, JSON.stringify(outputData, null, 2), 'utf-8');
+      console.log(`✨ 保存成功: ${savePath}`);
+    } catch (err) {
+      console.error(`❌ 保存エラー: ${err.message}`);
+    }
+    
+    // 💡 【重要】残存するChromeプロセスを完全にキルする
+    try {
+      if (browser.isConnected()) {
+        await browser.close();
+      }
+    } catch (e) {
+      // 既に閉じられている場合は無視
+    }
+    
+    // Nodeプロセスを終了
+    process.exit(0);
+  };
+
   await context.exposeFunction('notifyNodeEvent', (eventData) => {
     let memo = `${eventData.tag} を操作`;
     if (eventData.text) memo += ` (${eventData.text})`;
@@ -42,7 +85,6 @@ let windowCounter = 1;
       step.value = eventData.value;
     }
     
-    // 直前のステップと全く同じ（重複イベント）なら無視する
     const lastStep = steps[steps.length - 1];
     if (lastStep && lastStep.action === step.action && lastStep.selector === step.selector && lastStep.value === step.value) {
         return;
@@ -52,9 +94,7 @@ let windowCounter = 1;
     console.log(`[記録] ${step.action} -> ${step.selector}`);
   });
 
-  // 💡 新しいページ(タブ/ウィンドウ)が開くたびに監視スクリプトを注入
   context.on('page', async (newPage) => {
-    // 最初のページ以外なら「別窓切り替えステップ」を自動挿入
     if (steps.length > 0) {
       const winName = `page${windowCounter++}`;
       steps.push({
@@ -65,39 +105,28 @@ let windowCounter = 1;
       console.log(`[記録] 🔗 別ウィンドウのオープンを検知しました`);
     }
 
-    // クライアント(ブラウザ)側で操作を監視してセレクタを自動構築するスクリプト
     await newPage.addInitScript(() => {
       if (window.__AUTOREC_INIT) return;
       window.__AUTOREC_INIT = true;
 
-      // 🤖 【改修】より壊れにくく柔軟な文字列セレクタを生成するロジック
       const getSelector = (el) => {
-        // 1. 一意なIDや属性は最優先（変更なし）
         if (el.id) return `[id="${el.id}"]`;
         if (el.getAttribute('data-testid')) return `[data-testid="${el.getAttribute('data-testid')}"]`;
         if (el.getAttribute('placeholder')) return `[placeholder="${el.getAttribute('placeholder')}"]`;
         if (el.name) return `[name="${el.name}"]`;
         if (el.getAttribute('aria-label')) return `${el.tagName.toLowerCase()}[aria-label="${el.getAttribute('aria-label')}"]`;
         
-        // テキストノードを取得してクリーニング
         const text = el.innerText ? el.innerText.trim().split('\n')[0].trim() : '';
-        
-        // 2. テキストが存在する場合、厳格な name= ではなく、柔軟な `has-text` (部分一致) を使う
         if (text && text.length > 0 && text.length < 30) {
-            // ダブルクォーテーションをエスケープ
             const cleanText = text.replace(/"/g, '\\"');
             const tag = el.tagName.toLowerCase();
-            
             if (tag === 'a') return `a:has-text("${cleanText}")`;
             if (tag === 'button' || el.getAttribute('role') === 'button') return `button:has-text("${cleanText}")`;
-            
-            // a, button, input, select 以外の場合も、タグに紐づけたテキスト検索にする
             if (tag !== 'select' && tag !== 'input') {
                 return `${tag}:has-text("${cleanText}")`;
             }
         }
         
-        // 3. 最終フォールバック (タグ + 複数クラス名)
         let pathStr = el.tagName.toLowerCase();
         if (el.className && typeof el.className === 'string') {
             const classes = el.className.trim().split(/\s+/).filter(c => c).join('.');
@@ -106,13 +135,10 @@ let windowCounter = 1;
         return pathStr;
       };
 
-      // クリックイベントの監視
       document.addEventListener('click', (e) => {
-        // Inputフィールドのクリックは文字入力(change)で拾うので除外
         if (e.target.tagName === 'INPUT' && (e.target.type === 'text' || e.target.type === 'password' || e.target.type === 'email')) return;
         if (e.target.tagName === 'SELECT') return;
 
-        // 親を遡って button や a リンクを探す
         let el = e.target;
         while (el && el !== document.body) {
           if (el.tagName === 'A' || el.tagName === 'BUTTON' || el.getAttribute('role') === 'button') break;
@@ -128,7 +154,6 @@ let windowCounter = 1;
         });
       }, true);
 
-      // フォーム入力・選択イベントの監視
       document.addEventListener('change', (e) => {
         const el = e.target;
         const selector = getSelector(el);
@@ -142,7 +167,7 @@ let windowCounter = 1;
           });
         } else if (el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio')) {
           window.notifyNodeEvent({
-            action: 'click', // Playwrightではチェックボックスはclick
+            action: 'click', 
             selector: selector,
             tag: 'input'
           });
@@ -161,34 +186,9 @@ let windowCounter = 1;
   const page = await context.newPage();
   await page.goto(startUrl);
 
-  // 💡 ブラウザが閉じられた瞬間にJSONを自動保存
-  browser.on('disconnected', () => {
-    console.log(`\n🛑 ブラウザが閉じられました。シナリオを保存します...`);
-    
-    const scenarioDir = path.join(__dirname, 'project', proj, 'scenario');
-    if (!fs.existsSync(scenarioDir)) {
-      fs.mkdirSync(scenarioDir, { recursive: true });
-    }
-    
-    const safeFileName = fileName.endsWith('.json') ? fileName : `${fileName}.json`;
-    const savePath = path.join(scenarioDir, safeFileName);
-    
-    // 💡 未入力時はデフォルトの文言をセットする
-    const finalMemo = inputMemo ? inputMemo : "✅ 自動レコーダーによってキャプチャされたシナリオ";
-
-    const outputData = {
-      scenario_name: safeFileName.replace('.json', ''),
-      start_url: startUrl,
-      memo: finalMemo,
-      steps: steps
-    };
-    
-    try {
-      fs.writeFileSync(savePath, JSON.stringify(outputData, null, 2), 'utf-8');
-      console.log(`✨ 保存成功: ${savePath}`);
-    } catch (err) {
-      console.error(`❌ 保存エラー: ${err.message}`);
-    }
-  });
-
+  // 💡 【修正】メインのページ（タブ）が閉じられた時点で即座に保存処理を走らせる
+  page.on('close', saveScenario);
+  context.on('close', saveScenario);
+  browser.on('disconnected', saveScenario);
+  
 })();

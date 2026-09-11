@@ -3,6 +3,7 @@ import sys
 import json
 import urllib.parse
 from datetime import datetime
+from itertools import zip_longest
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -74,7 +75,6 @@ def get_nested_value(d, path, separator="."):
 def search_value_by_mappings(packet, m_row):
     if not packet or not isinstance(packet, dict): return None
     
-    # AEP Web SDK 系の場合
     events = packet.get("xdm_payload", {}).get("events", [])
     if events:
         first_event = events[0]
@@ -107,7 +107,6 @@ def search_value_by_mappings(packet, m_row):
         elif check_key == "events":
             return analytics_data.get("events", xdm_data.get("eventType", None))
 
-    # レガシー Adobe Analytics (params) 系の場合のフォールバック
     params = packet.get("params", {})
     if params:
         check_key = m_row["aa_key"]
@@ -121,13 +120,7 @@ def format_extracted_value(val):
     if isinstance(val, (dict, list)): return json.dumps(val, ensure_ascii=False)
     return str(val)
 
-# ==========================================
-# 🧩 Phase 1: ツールごとのパケット分離ロジック
-# ==========================================
 def filter_events_by_type(events, target_type):
-    """
-    パケットの配列を、GA4用とAdobe(AA/AEP)用に分類する
-    """
     filtered = []
     for ev in events:
         ev_type = ev.get("type", "")
@@ -140,30 +133,33 @@ def filter_events_by_type(events, target_type):
             filtered.append(ev)
         elif target_type == "AA" and is_aa:
             filtered.append(ev)
-            
     return filtered
 
+def group_events_by_step(events):
+    """
+    イベントを step_index をキーとした辞書にグループ化する（Phase 2 用）
+    例: { 0: [event1, event2], 1: [event3] }
+    """
+    grouped = {}
+    for ev in events:
+        s_idx = ev.get("step_index", 0)
+        if s_idx not in grouped:
+            grouped[s_idx] = []
+        grouped[s_idx].append(ev)
+    return grouped
 
-# ==========================================
-# 📊 単一シート処理ロジック (リファクタリング済)
-# ==========================================
-def process_single_sheet(ws, sheet_name, latest_events, base_events, config, latest_filename, base_filename):
+def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename, base_filename):
     ex_set = config["excel_setting"]
     ext_rules = config["extraction_rules"]
-    
     replace_placeholders_in_sheet(ws, config)
-    
     is_ga4 = (sheet_name == "GA4")
     
-    # 定義の開始位置を探す
     START_DATA_COL = 1
     while ws.cell(row=2, column=START_DATA_COL).value:
         START_DATA_COL += 1
 
     mapping_rows = []
     url_row_idx = None
-
-    # マッピング情報の抽出
     for r in range(3, ws.max_row + 1):
         if START_DATA_COL == 4:
             aa_key = str(ws.cell(row=r, column=1).value or "").strip()
@@ -185,13 +181,8 @@ def process_single_sheet(ws, sheet_name, latest_events, base_events, config, lat
             if not url_row_idx and (aa_key in ["g", "dl"] or "url" in tool_name.lower()):
                 url_row_idx = r
 
-    max_cols = max(len(latest_events), len(base_events))
-    if max_cols == 0: 
-        return # データが0件のシートは何もしない
-
     OLD_START_ROW = 2 + len(mapping_rows) + 4
     
-    # 書式と色設定
     fills = {
         "new": PatternFill(start_color=ex_set["theme_color_new"], end_color=ex_set["theme_color_new"], fill_type="solid"),
         "old": PatternFill(start_color=ex_set["theme_color_old"], end_color=ex_set["theme_color_old"], fill_type="solid"),
@@ -206,12 +197,10 @@ def process_single_sheet(ws, sheet_name, latest_events, base_events, config, lat
     thin_border = Border(left=Side(style='thin', color='CCCCCC'), right=Side(style='thin', color='CCCCCC'),
                          top=Side(style='thin', color='CCCCCC'), bottom=Side(style='thin', color='CCCCCC'))
 
-    # ファイル名表示
     TITLE_COL = 4
     ws.cell(row=1, column=TITLE_COL, value=f"▼ 【 現在データ (新) 】 📄 ファイル: {latest_filename}").font = Font(name=ex_set["font_name"], bold=True, size=11, color="2E6930")
     ws.cell(row=OLD_START_ROW - 1, column=TITLE_COL, value=f"▼ 【 過去データ (旧) 】 📄 ファイル: {base_filename}").font = Font(name=ex_set["font_name"], bold=True, size=11, color="4B6F96")
 
-    # 過去データ領域の左側枠(行定義)のコピー
     for idx, m_row in enumerate(mapping_rows):
         target_old_row = OLD_START_ROW + 1 + idx
         for col_i in range(1, START_DATA_COL):
@@ -221,85 +210,94 @@ def process_single_sheet(ws, sheet_name, latest_events, base_events, config, lat
             c_target.fill = PatternFill(start_color="FAFAF7", end_color="FAFAF7", fill_type="solid")
             c_target.border = thin_border
 
-    # パケットデータの書き出し・突合ループ
-    for c_idx in range(max_cols):
-        col_num = START_DATA_COL + c_idx
-        p_label = f"Packet-{c_idx + 1}"
+    grouped_new = group_events_by_step(ev_new)
+    grouped_old = group_events_by_step(ev_old)
+    
+    all_steps = sorted(set(list(grouped_new.keys()) + list(grouped_old.keys())))
+    
+    current_col = START_DATA_COL
+    total_output_cols = 0
+    
+    for s_idx in all_steps:
+        packets_new_for_step = grouped_new.get(s_idx, [])
+        packets_old_for_step = grouped_old.get(s_idx, [])
         
-        # ヘッダー作成
-        for cell_h, fill_h in [(ws.cell(row=2, column=col_num, value=p_label), fills["new"]),
-                               (ws.cell(row=OLD_START_ROW, column=col_num, value=p_label), fills["old"])]:
-            cell_h.font = fonts["header"]
-            cell_h.fill = fill_h
-            cell_h.alignment = Alignment(horizontal="center", vertical="center")
-            cell_h.border = thin_border
+        max_packets_in_step = max(len(packets_new_for_step), len(packets_old_for_step))
+        if max_packets_in_step == 0: continue
+        
+        for p_idx, (p_new, p_old) in enumerate(zip_longest(packets_new_for_step, packets_old_for_step)):
+            p_label = f"Step {s_idx + 1}"
+            if max_packets_in_step > 1:
+                p_label += f"-{p_idx + 1}"
+                
+            for cell_h, fill_h in [(ws.cell(row=2, column=current_col, value=p_label), fills["new"]),
+                                   (ws.cell(row=OLD_START_ROW, column=current_col, value=p_label), fills["old"])]:
+                cell_h.font = fonts["header"]
+                cell_h.fill = fill_h
+                cell_h.alignment = Alignment(horizontal="center", vertical="center")
+                cell_h.border = thin_border
 
-        packet_new = latest_events[c_idx] if c_idx < len(latest_events) else None
-        packet_old = base_events[c_idx] if c_idx < len(base_events) else None
-
-        if is_ga4:
-            parsed_new = parse_ga4_query_string(packet_new.get("raw", packet_new.get("url", ""))) if packet_new else {}
-            parsed_old = parse_ga4_query_string(packet_old.get("raw", packet_old.get("url", ""))) if packet_old else {}
-
-        # 定義行ごとに値をマッピングして出力
-        for idx, m_row in enumerate(mapping_rows):
-            row_new = m_row["row_idx"]
-            row_old = OLD_START_ROW + 1 + idx
-            val_new = val_old = ""
-            
             if is_ga4:
-                if packet_new and m_row["aa_key"] in parsed_new: val_new = parsed_new[m_row["aa_key"]]
-                if packet_old and m_row["aa_key"] in parsed_old: val_old = parsed_old[m_row["aa_key"]]
-            else:
-                res_new = search_value_by_mappings(packet_new, m_row)
-                res_old = search_value_by_mappings(packet_old, m_row)
-                if res_new is not None: val_new = format_extracted_value(res_new)
-                if res_old is not None: val_old = format_extracted_value(res_old)
+                parsed_new = parse_ga4_query_string(p_new.get("raw", p_new.get("url", ""))) if p_new else {}
+                parsed_old = parse_ga4_query_string(p_old.get("raw", p_old.get("url", ""))) if p_old else {}
 
-            c_new = ws.cell(row=row_new, column=col_num, value=val_new)
-            c_old = ws.cell(row=row_old, column=col_num, value=val_old)
-            
-            for c in [c_new, c_old]:
-                c.font = fonts["normal"]
-                c.border = thin_border
-                c.alignment = Alignment(horizontal="left", vertical="center")
+            for idx, m_row in enumerate(mapping_rows):
+                row_new = m_row["row_idx"]
+                row_old = OLD_START_ROW + 1 + idx
+                val_new = val_old = ""
+                
+                if is_ga4:
+                    if p_new and m_row["aa_key"] in parsed_new: val_new = parsed_new[m_row["aa_key"]]
+                    if p_old and m_row["aa_key"] in parsed_old: val_old = parsed_old[m_row["aa_key"]]
+                else:
+                    res_new = search_value_by_mappings(p_new, m_row)
+                    res_old = search_value_by_mappings(p_old, m_row)
+                    if res_new is not None: val_new = format_extracted_value(res_new)
+                    if res_old is not None: val_old = format_extracted_value(res_old)
 
-            is_ignored = m_row["aa_key"] in ext_rules["ignore_params"]
+                c_new = ws.cell(row=row_new, column=current_col, value=val_new)
+                c_old = ws.cell(row=row_old, column=current_col, value=val_old)
+                
+                for c in [c_new, c_old]:
+                    c.font = fonts["normal"]
+                    c.border = thin_border
+                    c.alignment = Alignment(horizontal="left", vertical="center")
 
-            # 差分比較と色塗り判定
-            if (c_idx >= len(latest_events)) and (c_idx < len(base_events)):
-                c_new.fill = fills["empty"]
-                c_new.value = "❌ パケット欠損"
-                if not is_ignored and val_old != "": c_old.fill = fills["diff"]
-            elif (c_idx < len(latest_events)) and (c_idx >= len(base_events)):
-                if not is_ignored and val_new != "": c_new.fill = fills["diff"]
-                c_old.fill = fills["empty"]
-                c_old.value = "⚠️ 過去になし"
-            elif val_new != val_old:
-                if not is_ignored:
-                    if val_new != "": c_new.fill = fills["diff"]; c_new.font = fonts["diff"]
-                    if val_old != "": c_old.fill = fills["diff"]
+                is_ignored = m_row["aa_key"] in ext_rules["ignore_params"]
 
-    # 必須列以外の非表示化とグループ化
-    for c_idx in range(1, 4):
-        ws.column_dimensions[get_column_letter(c_idx)].hidden = True
+                if not p_new and p_old:
+                    c_new.fill = fills["empty"]
+                    c_new.value = "❌ 欠損"
+                    if not is_ignored and val_old != "": c_old.fill = fills["diff"]
+                elif p_new and not p_old:
+                    if not is_ignored and val_new != "": c_new.fill = fills["diff"]
+                    c_old.fill = fills["empty"]
+                    c_old.value = "⚠️ 過去になし"
+                elif val_new != val_old:
+                    if not is_ignored:
+                        if val_new != "": c_new.fill = fills["diff"]; c_new.font = fonts["diff"]
+                        if val_old != "": c_old.fill = fills["diff"]
+
+            current_col += 1
+            total_output_cols += 1
+
+    if total_output_cols == 0: return
 
     ws.row_dimensions.group(3, 2 + len(mapping_rows), hidden=False, outline_level=1)
     ws.row_dimensions.group(OLD_START_ROW + 1, OLD_START_ROW + len(mapping_rows), hidden=False, outline_level=1)
 
-    # 空行の非表示処理
     for idx, m_row in enumerate(mapping_rows):
         row_new = m_row["row_idx"]
         row_old = OLD_START_ROW + 1 + idx
         is_empty_row = True
         
-        for c_idx in range(max_cols):
+        for c_idx in range(total_output_cols):
             col_num = START_DATA_COL + c_idx
             v_new = str(ws.cell(row=row_new, column=col_num).value or "").strip()
             v_old = str(ws.cell(row=row_old, column=col_num).value or "").strip()
             
-            if (v_new and v_new not in ["❌ パケット欠損", "⚠️ 過去になし"]) or \
-               (v_old and v_old not in ["❌ パケット欠損", "⚠️ 過去になし"]):
+            if (v_new and v_new not in ["❌ 欠損", "⚠️ 過去になし"]) or \
+               (v_old and v_old not in ["❌ 欠損", "⚠️ 過去になし"]):
                 is_empty_row = False
                 break
                 
@@ -307,12 +305,11 @@ def process_single_sheet(ws, sheet_name, latest_events, base_events, config, lat
             ws.row_dimensions[row_new].hidden = True
             ws.row_dimensions[row_old].hidden = True
 
-    # URLごとの列グループ化
     if url_row_idx:
         start_col_grp = START_DATA_COL
         current_url = str(ws.cell(row=url_row_idx, column=START_DATA_COL).value or "").strip()
         
-        for c_idx in range(1, max_cols):
+        for c_idx in range(1, total_output_cols):
             col_num = START_DATA_COL + c_idx
             url_val = str(ws.cell(row=url_row_idx, column=col_num).value or "").strip()
             
@@ -324,22 +321,33 @@ def process_single_sheet(ws, sheet_name, latest_events, base_events, config, lat
                 start_col_grp = col_num
                 current_url = url_val
                 
-        if (START_DATA_COL + max_cols - 1) > start_col_grp:
-            for grp_col in range(start_col_grp + 1, START_DATA_COL + max_cols):
+        if (START_DATA_COL + total_output_cols - 1) > start_col_grp:
+            for grp_col in range(start_col_grp + 1, START_DATA_COL + total_output_cols):
                 col_letter = get_column_letter(grp_col)
                 ws.column_dimensions[col_letter].outline_level = 1
-
-    for col in ws.iter_cols(min_col=START_DATA_COL, max_col=max_cols + START_DATA_COL - 1):
-        max_len = max(len(str(cell.value or '')) for cell in col)
-        ws.column_dimensions[col[0].column_letter].width = min(max(max_len + 3, 12), 40)
 
     ws.sheet_properties.outlinePr.summaryRight = False
     ws.sheet_properties.outlinePr.summaryBelow = False
 
+    # 💡 修正: D列(データ出力列)以降が非表示にならないよう、一番最後に強制的に表示状態に上書きする
+    max_col_to_check = START_DATA_COL + total_output_cols - 1
+    for c_idx in range(1, max_col_to_check + 1):
+        col_letter = get_column_letter(c_idx)
+        if c_idx < START_DATA_COL:
+            # A, B, C 列は隠す
+            ws.column_dimensions[col_letter].hidden = True
+        else:
+            # D列以降のデータ列は絶対に表示させる
+            ws.column_dimensions[col_letter].hidden = False
+            
+            # 列幅の自動調整もここで行う
+            max_len = 0
+            for cell in ws[col_letter]:
+                if cell.value:
+                    max_len = max(max_len, len(str(cell.value)))
+            ws.column_dimensions[col_letter].width = min(max(max_len + 3, 12), 40)
 
-# ==========================================
-# 🚀 エントリーポイント (メインロジック)
-# ==========================================
+
 def generate_compare_report(project_name, latest_json_path, base_json_path, output_excel_name, logger_func=print):
     project_dir = os.path.join("project", project_name)
     template_path = os.path.join(project_dir, "template.xlsx")
@@ -388,7 +396,6 @@ def generate_compare_report(project_name, latest_json_path, base_json_path, outp
     if not process_targets:
         return logger_func("❌ 処理できる対象シートとデータの組み合わせが見つかりません。テンプレートのシート名（GA4 / Adobe Analytics）を確認してください。")
 
-    # 処理対象以外の不要なシートを削除
     keep_sheets = ["表紙"] + [t[0] for t in process_targets]
     for name in list(wb.sheetnames):
         if name not in keep_sheets:
@@ -403,8 +410,8 @@ def generate_compare_report(project_name, latest_json_path, base_json_path, outp
         process_single_sheet(
             ws=wb[sheet_name],
             sheet_name=sheet_name,
-            latest_events=ev_new,
-            base_events=ev_old,
+            ev_new=ev_new,
+            ev_old=ev_old,
             config=config,
             latest_filename=os.path.basename(latest_json_path),
             base_filename=os.path.basename(base_json_path)
