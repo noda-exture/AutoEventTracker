@@ -73,39 +73,47 @@ def get_nested_value(d, path, separator="."):
 
 def search_value_by_mappings(packet, m_row):
     if not packet or not isinstance(packet, dict): return None
+    
+    # AEP Web SDK 系の場合
     events = packet.get("xdm_payload", {}).get("events", [])
-    if not events: return None
-    first_event = events[0]
-    
-    analytics_data = first_event.get("data", {}).get("__adobe", {}).get("analytics", {})
-    
-    if m_row["data_path"]:
-        val = get_nested_value(first_event, m_row["data_path"])
-        if val is not None: return val
+    if events:
+        first_event = events[0]
+        analytics_data = first_event.get("data", {}).get("__adobe", {}).get("analytics", {})
         
-    if m_row["xdm_path"]:
-        p = m_row["xdm_path"]
-        full_xdm_path = p if p.startswith("xdm.") else f"xdm.{p}"
-        val = get_nested_value(first_event, full_xdm_path)
-        if val is not None: return val
-        
-    if m_row["tool_name"] and m_row["tool_name"] in analytics_data:
-        return analytics_data[m_row["tool_name"]]
-        
-    if m_row["aa_key"] and m_row["aa_key"] in analytics_data:
-        return analytics_data[m_row["aa_key"]]
-        
-    xdm_data = first_event.get("xdm", {})
-    check_key = m_row["aa_key"] or m_row["tool_name"]
-    if check_key == "g" or check_key.lower() == "page url":
-        return xdm_data.get("web", {}).get("webPageDetails", {}).get("URL", None)
-    elif check_key == "r" or check_key.lower() == "referrer":
-        return xdm_data.get("web", {}).get("webReferrer", {}).get("URL", None)
-    elif check_key == "pageName" or check_key.lower() == "page name":
-        return xdm_data.get("web", {}).get("webPageDetails", {}).get("name", None)
-    elif check_key == "events":
-        return analytics_data.get("events", xdm_data.get("eventType", None))
-        
+        if m_row["data_path"]:
+            val = get_nested_value(first_event, m_row["data_path"])
+            if val is not None: return val
+            
+        if m_row["xdm_path"]:
+            p = m_row["xdm_path"]
+            full_xdm_path = p if p.startswith("xdm.") else f"xdm.{p}"
+            val = get_nested_value(first_event, full_xdm_path)
+            if val is not None: return val
+            
+        if m_row["tool_name"] and m_row["tool_name"] in analytics_data:
+            return analytics_data[m_row["tool_name"]]
+            
+        if m_row["aa_key"] and m_row["aa_key"] in analytics_data:
+            return analytics_data[m_row["aa_key"]]
+            
+        xdm_data = first_event.get("xdm", {})
+        check_key = m_row["aa_key"] or m_row["tool_name"]
+        if check_key == "g" or check_key.lower() == "page url":
+            return xdm_data.get("web", {}).get("webPageDetails", {}).get("URL", None)
+        elif check_key == "r" or check_key.lower() == "referrer":
+            return xdm_data.get("web", {}).get("webReferrer", {}).get("URL", None)
+        elif check_key == "pageName" or check_key.lower() == "page name":
+            return xdm_data.get("web", {}).get("webPageDetails", {}).get("name", None)
+        elif check_key == "events":
+            return analytics_data.get("events", xdm_data.get("eventType", None))
+
+    # レガシー Adobe Analytics (params) 系の場合のフォールバック
+    params = packet.get("params", {})
+    if params:
+        check_key = m_row["aa_key"]
+        if check_key and check_key in params:
+            return params[check_key]
+
     return None
 
 def format_extracted_value(val):
@@ -113,48 +121,41 @@ def format_extracted_value(val):
     if isinstance(val, (dict, list)): return json.dumps(val, ensure_ascii=False)
     return str(val)
 
-# 💡 GUIからログを中継するための `logger_func` と、フルパス対応を追加！
-def generate_compare_report(project_name, latest_json_path, base_json_path, output_excel_name, logger_func=print):
-    project_dir = os.path.join("project", project_name)
-    template_path = os.path.join(project_dir, "template.xlsx")
-    
-    # 💡 パスがフルパスで渡された場合（GUI）と、ファイル名のみで渡された場合（CUI）の両方に対応
-    l_path = latest_json_path if os.path.isabs(latest_json_path) else os.path.join(project_dir, "outputs", latest_json_path)
-    b_path = base_json_path if os.path.isabs(base_json_path) else os.path.join(project_dir, "outputs", base_json_path)
-    output_excel_path = os.path.join(project_dir, "outputs", output_excel_name)
+# ==========================================
+# 🧩 Phase 1: ツールごとのパケット分離ロジック
+# ==========================================
+def filter_events_by_type(events, target_type):
+    """
+    パケットの配列を、GA4用とAdobe(AA/AEP)用に分類する
+    """
+    filtered = []
+    for ev in events:
+        ev_type = ev.get("type", "")
+        url_or_raw = ev.get("url", ev.get("raw", ""))
+        
+        is_ga4 = (ev_type == "GA4") or ("tid=G-" in url_or_raw) or ("google-analytics.com" in url_or_raw)
+        is_aa = (ev_type in ["Adobe Analytics (Legacy)", "AEP Web SDK"]) or ("/b/ss/" in url_or_raw) or ("edge.adobedc.net" in url_or_raw)
+        
+        if target_type == "GA4" and is_ga4:
+            filtered.append(ev)
+        elif target_type == "AA" and is_aa:
+            filtered.append(ev)
+            
+    return filtered
 
-    config = load_project_config(project_dir)
+
+# ==========================================
+# 📊 単一シート処理ロジック (リファクタリング済)
+# ==========================================
+def process_single_sheet(ws, sheet_name, latest_events, base_events, config, latest_filename, base_filename):
     ex_set = config["excel_setting"]
     ext_rules = config["extraction_rules"]
     
-    # 💡 print() の代わりに logger_func() を使って画面に文字を送る
-    if not os.path.exists(template_path): return logger_func(f"❌ テンプレートが無い: {template_path}")
-    if not os.path.exists(l_path): return logger_func(f"❌ 最新JSONが無い: {l_path}")
-    if not os.path.exists(b_path): return logger_func(f"❌ 過去JSONが無い: {b_path}")
-
-    try:
-        with open(l_path, "r", encoding="utf-8") as f: latest_data = json.load(f)
-        with open(b_path, "r", encoding="utf-8") as f: base_data = json.load(f)
-    except json.JSONDecodeError:
-        return logger_func("❌ JSONファイルの読み込みに失敗しました。ファイルが壊れていないか確認してください。")
-
-    latest_events = latest_data.get("events", [])
-    base_events = base_data.get("events", [])
-    
-    all_events = latest_events + base_events
-    is_ga4 = any(ev.get("type") == "GA4" or "tid=G-" in str(ev.get("raw", "")) for ev in all_events)
-    sheet_target = "GA4" if is_ga4 else "Adobe Analytics"
-
-    wb = load_workbook(template_path)
-    if sheet_target not in wb.sheetnames: return logger_func(f"❌ シート『{sheet_target}』がありません")
-    ws = wb[sheet_target]
-    
-    for name in list(wb.sheetnames):
-        if name not in ["表紙", sheet_target]: wb.remove(wb[name])
-
-    if "表紙" in wb.sheetnames: replace_placeholders_in_sheet(wb["表紙"], config)
     replace_placeholders_in_sheet(ws, config)
-
+    
+    is_ga4 = (sheet_name == "GA4")
+    
+    # 定義の開始位置を探す
     START_DATA_COL = 1
     while ws.cell(row=2, column=START_DATA_COL).value:
         START_DATA_COL += 1
@@ -162,6 +163,7 @@ def generate_compare_report(project_name, latest_json_path, base_json_path, outp
     mapping_rows = []
     url_row_idx = None
 
+    # マッピング情報の抽出
     for r in range(3, ws.max_row + 1):
         if START_DATA_COL == 4:
             aa_key = str(ws.cell(row=r, column=1).value or "").strip()
@@ -184,9 +186,12 @@ def generate_compare_report(project_name, latest_json_path, base_json_path, outp
                 url_row_idx = r
 
     max_cols = max(len(latest_events), len(base_events))
-    if max_cols == 0: return logger_func("⚠️ パケットデータが空です")
+    if max_cols == 0: 
+        return # データが0件のシートは何もしない
 
     OLD_START_ROW = 2 + len(mapping_rows) + 4
+    
+    # 書式と色設定
     fills = {
         "new": PatternFill(start_color=ex_set["theme_color_new"], end_color=ex_set["theme_color_new"], fill_type="solid"),
         "old": PatternFill(start_color=ex_set["theme_color_old"], end_color=ex_set["theme_color_old"], fill_type="solid"),
@@ -201,11 +206,12 @@ def generate_compare_report(project_name, latest_json_path, base_json_path, outp
     thin_border = Border(left=Side(style='thin', color='CCCCCC'), right=Side(style='thin', color='CCCCCC'),
                          top=Side(style='thin', color='CCCCCC'), bottom=Side(style='thin', color='CCCCCC'))
 
-    # ファイル名表示（フルパスからファイル名だけを抽出）
+    # ファイル名表示
     TITLE_COL = 4
-    ws.cell(row=1, column=TITLE_COL, value=f"▼ 【 現在データ (新) 】 📄 ファイル: {os.path.basename(latest_json_path)}").font = Font(name=ex_set["font_name"], bold=True, size=11, color="2E6930")
-    ws.cell(row=OLD_START_ROW - 1, column=TITLE_COL, value=f"▼ 【 過去データ (旧) 】 📄 ファイル: {os.path.basename(base_json_path)}").font = Font(name=ex_set["font_name"], bold=True, size=11, color="4B6F96")
+    ws.cell(row=1, column=TITLE_COL, value=f"▼ 【 現在データ (新) 】 📄 ファイル: {latest_filename}").font = Font(name=ex_set["font_name"], bold=True, size=11, color="2E6930")
+    ws.cell(row=OLD_START_ROW - 1, column=TITLE_COL, value=f"▼ 【 過去データ (旧) 】 📄 ファイル: {base_filename}").font = Font(name=ex_set["font_name"], bold=True, size=11, color="4B6F96")
 
+    # 過去データ領域の左側枠(行定義)のコピー
     for idx, m_row in enumerate(mapping_rows):
         target_old_row = OLD_START_ROW + 1 + idx
         for col_i in range(1, START_DATA_COL):
@@ -215,10 +221,12 @@ def generate_compare_report(project_name, latest_json_path, base_json_path, outp
             c_target.fill = PatternFill(start_color="FAFAF7", end_color="FAFAF7", fill_type="solid")
             c_target.border = thin_border
 
+    # パケットデータの書き出し・突合ループ
     for c_idx in range(max_cols):
         col_num = START_DATA_COL + c_idx
         p_label = f"Packet-{c_idx + 1}"
         
+        # ヘッダー作成
         for cell_h, fill_h in [(ws.cell(row=2, column=col_num, value=p_label), fills["new"]),
                                (ws.cell(row=OLD_START_ROW, column=col_num, value=p_label), fills["old"])]:
             cell_h.font = fonts["header"]
@@ -230,13 +238,13 @@ def generate_compare_report(project_name, latest_json_path, base_json_path, outp
         packet_old = base_events[c_idx] if c_idx < len(base_events) else None
 
         if is_ga4:
-            parsed_new = parse_ga4_query_string(packet_new.get("raw", "")) if packet_new else {}
-            parsed_old = parse_ga4_query_string(packet_old.get("raw", "")) if packet_old else {}
+            parsed_new = parse_ga4_query_string(packet_new.get("raw", packet_new.get("url", ""))) if packet_new else {}
+            parsed_old = parse_ga4_query_string(packet_old.get("raw", packet_old.get("url", ""))) if packet_old else {}
 
+        # 定義行ごとに値をマッピングして出力
         for idx, m_row in enumerate(mapping_rows):
             row_new = m_row["row_idx"]
             row_old = OLD_START_ROW + 1 + idx
-            
             val_new = val_old = ""
             
             if is_ga4:
@@ -250,6 +258,7 @@ def generate_compare_report(project_name, latest_json_path, base_json_path, outp
 
             c_new = ws.cell(row=row_new, column=col_num, value=val_new)
             c_old = ws.cell(row=row_old, column=col_num, value=val_old)
+            
             for c in [c_new, c_old]:
                 c.font = fonts["normal"]
                 c.border = thin_border
@@ -257,6 +266,7 @@ def generate_compare_report(project_name, latest_json_path, base_json_path, outp
 
             is_ignored = m_row["aa_key"] in ext_rules["ignore_params"]
 
+            # 差分比較と色塗り判定
             if (c_idx >= len(latest_events)) and (c_idx < len(base_events)):
                 c_new.fill = fills["empty"]
                 c_new.value = "❌ パケット欠損"
@@ -270,12 +280,14 @@ def generate_compare_report(project_name, latest_json_path, base_json_path, outp
                     if val_new != "": c_new.fill = fills["diff"]; c_new.font = fonts["diff"]
                     if val_old != "": c_old.fill = fills["diff"]
 
+    # 必須列以外の非表示化とグループ化
     for c_idx in range(1, 4):
         ws.column_dimensions[get_column_letter(c_idx)].hidden = True
 
     ws.row_dimensions.group(3, 2 + len(mapping_rows), hidden=False, outline_level=1)
     ws.row_dimensions.group(OLD_START_ROW + 1, OLD_START_ROW + len(mapping_rows), hidden=False, outline_level=1)
 
+    # 空行の非表示処理
     for idx, m_row in enumerate(mapping_rows):
         row_new = m_row["row_idx"]
         row_old = OLD_START_ROW + 1 + idx
@@ -295,6 +307,7 @@ def generate_compare_report(project_name, latest_json_path, base_json_path, outp
             ws.row_dimensions[row_new].hidden = True
             ws.row_dimensions[row_old].hidden = True
 
+    # URLごとの列グループ化
     if url_row_idx:
         start_col_grp = START_DATA_COL
         current_url = str(ws.cell(row=url_row_idx, column=START_DATA_COL).value or "").strip()
@@ -323,6 +336,80 @@ def generate_compare_report(project_name, latest_json_path, base_json_path, outp
     ws.sheet_properties.outlinePr.summaryRight = False
     ws.sheet_properties.outlinePr.summaryBelow = False
 
+
+# ==========================================
+# 🚀 エントリーポイント (メインロジック)
+# ==========================================
+def generate_compare_report(project_name, latest_json_path, base_json_path, output_excel_name, logger_func=print):
+    project_dir = os.path.join("project", project_name)
+    template_path = os.path.join(project_dir, "template.xlsx")
+    
+    l_path = latest_json_path if os.path.isabs(latest_json_path) else os.path.join(project_dir, "outputs", latest_json_path)
+    b_path = base_json_path if os.path.isabs(base_json_path) else os.path.join(project_dir, "outputs", base_json_path)
+    output_excel_path = os.path.join(project_dir, "outputs", output_excel_name)
+
+    config = load_project_config(project_dir)
+    
+    if not os.path.exists(template_path): return logger_func(f"❌ テンプレートが無い: {template_path}")
+    if not os.path.exists(l_path): return logger_func(f"❌ 最新JSONが無い: {l_path}")
+    if not os.path.exists(b_path): return logger_func(f"❌ 過去JSONが無い: {b_path}")
+
+    try:
+        with open(l_path, "r", encoding="utf-8") as f: latest_data = json.load(f)
+        with open(b_path, "r", encoding="utf-8") as f: base_data = json.load(f)
+    except json.JSONDecodeError:
+        return logger_func("❌ JSONファイルの読み込みに失敗しました。ファイルが壊れていないか確認してください。")
+
+    latest_events = latest_data.get("events", [])
+    base_events = base_data.get("events", [])
+    
+    # 🧩 Phase 1: ツールごとに配列を分離
+    ga4_new = filter_events_by_type(latest_events, "GA4")
+    ga4_old = filter_events_by_type(base_events, "GA4")
+    aa_new = filter_events_by_type(latest_events, "AA")
+    aa_old = filter_events_by_type(base_events, "AA")
+
+    wb = load_workbook(template_path)
+    
+    # 💡 どちらのシートを処理対象とするか決定（両方ある場合は両方処理）
+    process_targets = []
+    if ga4_new or ga4_old:
+        if "GA4" in wb.sheetnames:
+            process_targets.append(("GA4", ga4_new, ga4_old))
+        else:
+            logger_func("⚠️ GA4のデータがありますが、テンプレートに『GA4』シートが無いためスキップします。")
+            
+    if aa_new or aa_old:
+        if "Adobe Analytics" in wb.sheetnames:
+            process_targets.append(("Adobe Analytics", aa_new, aa_old))
+        else:
+            logger_func("⚠️ Adobeのデータがありますが、テンプレートに『Adobe Analytics』シートが無いためスキップします。")
+
+    if not process_targets:
+        return logger_func("❌ 処理できる対象シートとデータの組み合わせが見つかりません。テンプレートのシート名（GA4 / Adobe Analytics）を確認してください。")
+
+    # 処理対象以外の不要なシートを削除
+    keep_sheets = ["表紙"] + [t[0] for t in process_targets]
+    for name in list(wb.sheetnames):
+        if name not in keep_sheets:
+            wb.remove(wb[name])
+
+    if "表紙" in wb.sheetnames:
+        replace_placeholders_in_sheet(wb["表紙"], config)
+
+    # 🔄 ターゲットとなるシート（最大2シート）を順番に処理
+    for sheet_name, ev_new, ev_old in process_targets:
+        logger_func(f"📊 シート『{sheet_name}』の突合処理を行っています...")
+        process_single_sheet(
+            ws=wb[sheet_name],
+            sheet_name=sheet_name,
+            latest_events=ev_new,
+            base_events=ev_old,
+            config=config,
+            latest_filename=os.path.basename(latest_json_path),
+            base_filename=os.path.basename(base_json_path)
+        )
+
     try:
         wb.save(output_excel_path)
     except PermissionError:
@@ -330,14 +417,10 @@ def generate_compare_report(project_name, latest_json_path, base_json_path, outp
         return None
 
     logger_func(f"🎉 比較レポートが完成しました！\n📊 保存先: {output_excel_path}\n")
-    
-    # 💡 成功時は、画面(GUI)側でファイルを開けるようにパスを返す
     return output_excel_path
 
-# CUI（コマンドライン）から実行された場合のエントリーポイント
 if __name__ == "__main__":
     if len(sys.argv) > 4:
         generate_compare_report(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])
     else:
         print("💡 使い方: python excel_reporter.py [案件名] [最新JSON名] [過去JSON名] [出力Excel名]")
-        print("💡 画面(GUI)を起動する場合は、 python gui_qt.py を実行してください。")
