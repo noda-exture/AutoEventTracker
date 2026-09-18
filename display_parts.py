@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineE
 from PySide6.QtCore import Qt
 
 # ==========================================
-# 🎨 カスタムUI部品
+# カスタムUI部品
 # ==========================================
 
 class DragDropLineEdit(QLineEdit):
@@ -35,7 +35,7 @@ class DragDropLineEdit(QLineEdit):
 
 
 # ==========================================
-# 📐 UIレイアウト構築クラス
+# UIレイアウト構築クラス
 # ==========================================
 
 class Ui_MainWindow:
@@ -53,7 +53,7 @@ class Ui_MainWindow:
         self.stacked_widget.setCurrentIndex(0)
 
     # ------------------------------------------
-    # 🏠 メイン画面 (ページ 0)
+    # メイン画面 (ページ 0)
     # ------------------------------------------
     def _setup_main_page(self):
         main_widget = QWidget()
@@ -83,19 +83,19 @@ class Ui_MainWindow:
         proj_layout.setContentsMargins(16, 12, 16, 12)
         proj_layout.setSpacing(12)
         
-        lbl_proj = QLabel("📂 対象プロジェクト:")
+        lbl_proj = QLabel("対象プロジェクト:")
         lbl_proj.setProperty("class", "bold-label")
         proj_layout.addWidget(lbl_proj)
 
         self.combo_proj = QComboBox()
         proj_layout.addWidget(self.combo_proj)
 
-        self.btn_edit_proj = QPushButton("✏️ プロジェクト設定編集")
+        self.btn_edit_proj = QPushButton("プロジェクト設定編集")
         self.btn_edit_proj.setObjectName("secondaryBtn")
         self.btn_edit_proj.setCursor(Qt.PointingHandCursor)
         proj_layout.addWidget(self.btn_edit_proj)
 
-        self.btn_create_proj = QPushButton("＋ プロジェクト新規作成")
+        self.btn_create_proj = QPushButton("新規プロジェクト")
         self.btn_create_proj.setObjectName("successBtn")
         self.btn_create_proj.setCursor(Qt.PointingHandCursor)
         proj_layout.addWidget(self.btn_create_proj)
@@ -106,9 +106,9 @@ class Ui_MainWindow:
         self.tabs.setObjectName("workspaceTabs")
         self.tabs.setDocumentMode(True)
         self.tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        self.tabs.addTab(self._create_analysis_tab(), "📊 分析 (パケット突合)")
-        self.tabs.addTab(self._create_execution_tab(), "🚀 シナリオ実行")
-        self.tabs.addTab(self._create_scenario_tab(), "🎬 シナリオ作成")
+        self.tabs.addTab(self._create_analysis_tab(), "計測データ比較")
+        self.tabs.addTab(self._create_execution_tab(), "シナリオ実行")
+        self.tabs.addTab(self._create_scenario_tab(), "シナリオ作成")
         layout.addWidget(self.tabs)
 
         # 処理ログ
@@ -123,14 +123,14 @@ class Ui_MainWindow:
 
         self.stacked_widget.addWidget(main_widget)
 
-    # --- 📊 分析タブ ---
+    # --- 分析タブ ---
     def _create_analysis_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setSpacing(16)
         layout.setContentsMargins(20, 24, 20, 20)
 
-        lbl_f1 = QLabel("現在データ / NEW")
+        lbl_f1 = QLabel("最新の計測データ")
         lbl_f1.setProperty("class", "bold-label")
         layout.addWidget(lbl_f1)
 
@@ -138,13 +138,13 @@ class Ui_MainWindow:
         row1.setSpacing(10)
         self.txt_f1 = DragDropLineEdit()
         self.txt_f1.setPlaceholderText("ファイルをドラッグ＆ドロップ...")
-        self.btn_f1 = QPushButton("📂 選択")
+        self.btn_f1 = QPushButton("選択")
         self.btn_f1.setObjectName("secondaryBtn")
         row1.addWidget(self.txt_f1)
         row1.addWidget(self.btn_f1)
         layout.addLayout(row1)
 
-        lbl_f2 = QLabel("比較対象データ / BASELINE")
+        lbl_f2 = QLabel("比較元の計測データ")
         lbl_f2.setProperty("class", "bold-label")
         layout.addWidget(lbl_f2)
 
@@ -152,13 +152,13 @@ class Ui_MainWindow:
         row2.setSpacing(10)
         self.txt_f2 = DragDropLineEdit()
         self.txt_f2.setPlaceholderText("ファイルをドラッグ＆ドロップ...")
-        self.btn_f2 = QPushButton("📂 選択")
+        self.btn_f2 = QPushButton("選択")
         self.btn_f2.setObjectName("secondaryBtn")
         row2.addWidget(self.txt_f2)
         row2.addWidget(self.btn_f2)
         layout.addLayout(row2)
 
-        lbl_out = QLabel("成果物 Excel ファイル名:")
+        lbl_out = QLabel("出力するExcelファイル名:")
         lbl_out.setProperty("class", "bold-label")
         layout.addWidget(lbl_out)
 
@@ -176,7 +176,7 @@ class Ui_MainWindow:
         self.btn_run_analysis.setObjectName("primaryBtn")
         self.btn_run_analysis.setCursor(Qt.PointingHandCursor)
         
-        self.btn_open = QPushButton("📂 出力フォルダを開く")
+        self.btn_open = QPushButton("出力フォルダを開く")
         self.btn_open.setObjectName("secondaryBtn")
         self.btn_open.setCursor(Qt.PointingHandCursor)
 
@@ -187,7 +187,7 @@ class Ui_MainWindow:
 
         return tab
 
-    # --- 🚀 シナリオ実行タブ ---
+    # --- シナリオ実行タブ ---
     def _create_execution_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -195,7 +195,7 @@ class Ui_MainWindow:
         layout.setContentsMargins(20, 24, 20, 20)
         layout.setSpacing(16)
 
-        lbl_exec = QLabel("実行するシナリオを選択してください:")
+        lbl_exec = QLabel("実行するシナリオ:")
         lbl_exec.setProperty("class", "bold-label")
         layout.addWidget(lbl_exec)
 
@@ -204,11 +204,11 @@ class Ui_MainWindow:
         self.combo_scenario = QComboBox()
         exec_header.addWidget(self.combo_scenario, stretch=2)
 
-        self.chk_headless = QCheckBox("ヘッドレス実行 (ブラウザ画面を非表示)")
+        self.chk_headless = QCheckBox("ブラウザを表示せずに実行")
         exec_header.addWidget(self.chk_headless, stretch=1)
         layout.addLayout(exec_header)
 
-        # 💡 情報カード：右端ギリギリまで広がり、文字の下部が切れないレイアウト
+        # 情報カード：右端ギリギリまで広がり、文字の下部が切れないレイアウト
         self.info_frame = QFrame()
         self.info_frame.setObjectName("infoFrame")
         self.info_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -222,15 +222,15 @@ class Ui_MainWindow:
         info_layout.setColumnStretch(0, 0)
         info_layout.setColumnStretch(1, 1)
 
-        lbl_i1 = QLabel("📝 シナリオ名 (ID):")
+        lbl_i1 = QLabel("シナリオ名:")
         lbl_i1.setProperty("class", "bold-label")
         lbl_i1.setFixedWidth(130)
 
-        lbl_i2 = QLabel("🔗 開始 URL:")
+        lbl_i2 = QLabel("開始URL:")
         lbl_i2.setProperty("class", "bold-label")
         lbl_i2.setFixedWidth(130)
 
-        lbl_i3 = QLabel("💬 メモ / 概要:")
+        lbl_i3 = QLabel("概要:")
         lbl_i3.setProperty("class", "bold-label")
         lbl_i3.setFixedWidth(130)
 
@@ -267,7 +267,7 @@ class Ui_MainWindow:
 
         return tab
 
-    # --- 🎬 シナリオ作成タブ ---
+    # --- シナリオ作成タブ ---
     def _create_scenario_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -275,7 +275,7 @@ class Ui_MainWindow:
         layout.setContentsMargins(20, 24, 20, 20)
         layout.setSpacing(14)
 
-        lbl_s1 = QLabel("① 保存するシナリオファイル名:")
+        lbl_s1 = QLabel("① シナリオファイル名:")
         lbl_s1.setProperty("class", "bold-label")
         layout.addWidget(lbl_s1)
 
@@ -283,7 +283,7 @@ class Ui_MainWindow:
         self.txt_scenario_file_auto.setPlaceholderText("例: my_scenario.json")
         layout.addWidget(self.txt_scenario_file_auto)
 
-        lbl_s2 = QLabel("② 開始URL (自動記録ブラウザを立ち上げるURL):")
+        lbl_s2 = QLabel("② 記録を開始するURL:")
         lbl_s2.setProperty("class", "bold-label")
         layout.addWidget(lbl_s2)
 
@@ -291,7 +291,7 @@ class Ui_MainWindow:
         self.txt_url_auto.setPlaceholderText("例: https://shop.example.com/")
         layout.addWidget(self.txt_url_auto)
 
-        lbl_s3 = QLabel("③ メモ / 概要 (任意):")
+        lbl_s3 = QLabel("③ シナリオの概要（任意）:")
         lbl_s3.setProperty("class", "bold-label")
         layout.addWidget(lbl_s3)
 
@@ -314,7 +314,7 @@ class Ui_MainWindow:
         return tab
 
     # ------------------------------------------
-    # ✨ プロジェクト作成・編集 兼用画面 (ページ 1)
+    # プロジェクト作成・編集 兼用画面 (ページ 1)
     # ------------------------------------------
     def _setup_create_project_page(self):
         create_widget = QWidget()
@@ -323,11 +323,11 @@ class Ui_MainWindow:
         layout.setAlignment(Qt.AlignTop)
         layout.setSpacing(16)
 
-        self.lbl_page_title = QLabel("✨ 新規プロジェクトを作成")
+        self.lbl_page_title = QLabel("新規プロジェクトを作成")
         self.lbl_page_title.setObjectName("sectionTitle")
         layout.addWidget(self.lbl_page_title)
         
-        self.lbl_page_desc = QLabel("案件用のフォルダ構成と基本設定ファイル（config.json）を自動生成します。")
+        self.lbl_page_desc = QLabel("プロジェクト用のフォルダと基本設定ファイル（config.json）を作成します。")
         self.lbl_page_desc.setObjectName("descLabel")
         layout.addWidget(self.lbl_page_desc)
 
@@ -353,7 +353,7 @@ class Ui_MainWindow:
         self.input_task.setPlaceholderText("例: カート追加イベントのパケット検証")
         self.input_task.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
-        lbl_p1 = QLabel("フォルダ名 (英数字推奨):")
+        lbl_p1 = QLabel("プロジェクトID（半角英数字推奨）:")
         lbl_p1.setProperty("class", "bold-label")
         lbl_p2 = QLabel("クライアント名:")
         lbl_p2.setProperty("class", "bold-label")
@@ -372,7 +372,7 @@ class Ui_MainWindow:
         tpl_layout = QVBoxLayout(self.tpl_frame)
         tpl_layout.setContentsMargins(24, 20, 24, 20)
         
-        tpl_title = QLabel("📄 テンプレート Excel の設定")
+        tpl_title = QLabel("Excelテンプレートの設定")
         tpl_title.setProperty("class", "bold-label")
         tpl_layout.addWidget(tpl_title)
 
@@ -383,7 +383,7 @@ class Ui_MainWindow:
         tpl_desc.setObjectName("descLabel")
         tpl_layout.addWidget(tpl_desc)
 
-        self.btn_open_template = QPushButton("📂 template.xlsx を開く / 確認する")
+        self.btn_open_template = QPushButton("template.xlsxを開く")
         self.btn_open_template.setObjectName("secondaryBtn")
         self.btn_open_template.setCursor(Qt.PointingHandCursor)
         tpl_layout.addWidget(self.btn_open_template, 0, Qt.AlignLeft)
@@ -400,7 +400,7 @@ class Ui_MainWindow:
         self.btn_cancel_proj.setObjectName("secondaryBtn")
         self.btn_cancel_proj.setCursor(Qt.PointingHandCursor)
         
-        self.btn_confirm_proj = QPushButton("CREATE (作成)")
+        self.btn_confirm_proj = QPushButton("プロジェクトを作成")
         self.btn_confirm_proj.setObjectName("primaryBtn")
         self.btn_confirm_proj.setCursor(Qt.PointingHandCursor)
 

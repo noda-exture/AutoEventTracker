@@ -12,7 +12,7 @@ const startUrl = process.argv[4];
 const inputMemo = process.argv[5] || ""; 
 
 if (!proj || !fileName || !startUrl) {
-  console.error('❌ エラー: 引数が不足しています。(project, fileName, startUrl)');
+  console.error('エラー: 引数が不足しています。(project, fileName, startUrl)');
   process.exit(1);
 }
 
@@ -21,18 +21,18 @@ let windowCounter = 1;
 let isSaved = false;
 
 (async () => {
-  console.log(`🚀 レコーダーを起動します...`);
-  console.log(`🔗 対象URL: ${startUrl}`);
+  console.log(`レコーダーを起動します...`);
+  console.log(`対象URL: ${startUrl}`);
 
   const browser = await chromium.launch({ headless: false });
   const context = await browser.newContext();
 
-  // 💡 【修正】保存処理を内部に移動し、browser.close() を確実に呼べるようにする
+  //  【修正】保存処理を内部に移動し、browser.close() を確実に呼べるようにする
   const saveScenario = async () => {
     if (isSaved) return;
     isSaved = true;
     
-    console.log(`\n🛑 終了操作を検知しました。シナリオを保存します...`);
+    console.log(`\n終了操作を検知しました。シナリオを保存します...`);
     
     const scenarioDir = path.join(__dirname, 'project', proj, 'scenario');
     if (!fs.existsSync(scenarioDir)) {
@@ -42,7 +42,7 @@ let isSaved = false;
     const safeFileName = fileName.endsWith('.json') ? fileName : `${fileName}.json`;
     const savePath = path.join(scenarioDir, safeFileName);
     
-    const finalMemo = inputMemo ? inputMemo : "✅ 自動レコーダーによってキャプチャされたシナリオ";
+    const finalMemo = inputMemo ? inputMemo : "自動レコーダーによってキャプチャされたシナリオ";
 
     const outputData = {
       scenario_name: safeFileName.replace('.json', ''),
@@ -54,12 +54,12 @@ let isSaved = false;
     try {
       // ファイルへ書き込み
       fs.writeFileSync(savePath, JSON.stringify(outputData, null, 2), 'utf-8');
-      console.log(`✨ 保存成功: ${savePath}`);
+      console.log(`保存成功: ${savePath}`);
     } catch (err) {
-      console.error(`❌ 保存エラー: ${err.message}`);
+      console.error(`保存エラー: ${err.message}`);
     }
     
-    // 💡 【重要】残存するChromeプロセスを完全にキルする
+    //  【重要】残存するChromeプロセスを完全にキルする
     try {
       if (browser.isConnected()) {
         await browser.close();
@@ -102,7 +102,7 @@ let isSaved = false;
         value: winName,
         memo: `別ウィンドウ [${winName}] へ切り替え`
       });
-      console.log(`[記録] 🔗 別ウィンドウのオープンを検知しました`);
+      console.log(`[記録] 別ウィンドウのオープンを検知しました`);
     }
 
     await newPage.addInitScript(() => {
@@ -186,7 +186,7 @@ let isSaved = false;
   const page = await context.newPage();
   await page.goto(startUrl);
 
-  // 💡 【修正】メインのページ（タブ）が閉じられた時点で即座に保存処理を走らせる
+  //  【修正】メインのページ（タブ）が閉じられた時点で即座に保存処理を走らせる
   page.on('close', saveScenario);
   context.on('close', saveScenario);
   browser.on('disconnected', saveScenario);

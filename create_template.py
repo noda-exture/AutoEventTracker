@@ -29,7 +29,7 @@ def create_comprehensive_template():
     ws_aa = wb.create_sheet(title="Adobe Analytics")
     ws_aa.views.sheetView[0].showGridLines = True
     
-    # 💡 ご指定のスタイリッシュなヘッダー名に変更
+    # ご指定のスタイリッシュなヘッダー名に変更
     aa_headers = ["AppMeasurement", "WebSDK(XDM)", "WebSDK(Data)", "項目", "説明"]
     for col_idx, text in enumerate(aa_headers, 1):
         cell = ws_aa.cell(row=2, column=col_idx, value=text)
@@ -64,7 +64,7 @@ def create_comprehensive_template():
     ws_ga4 = wb.create_sheet(title="GA4")
     ws_ga4.views.sheetView[0].showGridLines = True
     
-    # 💡 GA4側もプレフィックスを外し、D列・E列の名称を統一
+    # GA4側もプレフィックスを外し、D列・E列の名称を統一
     ga4_headers = ["GA4パラメータ", "パラメータ種別", "データ型", "項目", "説明"]
     for col_idx, text in enumerate(ga4_headers, 1):
         cell = ws_ga4.cell(row=2, column=col_idx, value=text)
@@ -116,7 +116,7 @@ def create_comprehensive_template():
     ws_ga4.column_dimensions['E'].width = 45
     
     wb.save(template_path)
-    print(f"🎉 ヘッダー名称をスッキリと更新したマスターテンプレートを生成しました！")
+    print("ヘッダー名を更新し、マスターテンプレートを生成しました。")
 
 if __name__ == "__main__":
     create_comprehensive_template()

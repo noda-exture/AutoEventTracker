@@ -198,8 +198,8 @@ def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename
                          top=Side(style='thin', color='CCCCCC'), bottom=Side(style='thin', color='CCCCCC'))
 
     TITLE_COL = 4
-    ws.cell(row=1, column=TITLE_COL, value=f"▼ 【 現在データ (新) 】 📄 ファイル: {latest_filename}").font = Font(name=ex_set["font_name"], bold=True, size=11, color="2E6930")
-    ws.cell(row=OLD_START_ROW - 1, column=TITLE_COL, value=f"▼ 【 過去データ (旧) 】 📄 ファイル: {base_filename}").font = Font(name=ex_set["font_name"], bold=True, size=11, color="4B6F96")
+    ws.cell(row=1, column=TITLE_COL, value=f"【 現在データ (新) 】 ファイル: {latest_filename}").font = Font(name=ex_set["font_name"], bold=True, size=11, color="2E6930")
+    ws.cell(row=OLD_START_ROW - 1, column=TITLE_COL, value=f"【 過去データ (旧) 】 ファイル: {base_filename}").font = Font(name=ex_set["font_name"], bold=True, size=11, color="4B6F96")
 
     for idx, m_row in enumerate(mapping_rows):
         target_old_row = OLD_START_ROW + 1 + idx
@@ -267,12 +267,12 @@ def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename
 
                 if not p_new and p_old:
                     c_new.fill = fills["empty"]
-                    c_new.value = "❌ 欠損"
+                    c_new.value = "欠損"
                     if not is_ignored and val_old != "": c_old.fill = fills["diff"]
                 elif p_new and not p_old:
                     if not is_ignored and val_new != "": c_new.fill = fills["diff"]
                     c_old.fill = fills["empty"]
-                    c_old.value = "⚠️ 過去になし"
+                    c_old.value = "過去になし"
                 elif val_new != val_old:
                     if not is_ignored:
                         if val_new != "": c_new.fill = fills["diff"]; c_new.font = fonts["diff"]
@@ -296,8 +296,8 @@ def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename
             v_new = str(ws.cell(row=row_new, column=col_num).value or "").strip()
             v_old = str(ws.cell(row=row_old, column=col_num).value or "").strip()
             
-            if (v_new and v_new not in ["❌ 欠損", "⚠️ 過去になし"]) or \
-               (v_old and v_old not in ["❌ 欠損", "⚠️ 過去になし"]):
+            if (v_new and v_new not in ["欠損", "過去になし"]) or \
+               (v_old and v_old not in ["欠損", "過去になし"]):
                 is_empty_row = False
                 break
                 
@@ -329,7 +329,7 @@ def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename
     ws.sheet_properties.outlinePr.summaryRight = False
     ws.sheet_properties.outlinePr.summaryBelow = False
 
-    # 💡 修正: D列(データ出力列)以降が非表示にならないよう、一番最後に強制的に表示状態に上書きする
+    # 修正: D列(データ出力列)以降が非表示にならないよう、一番最後に強制的に表示状態に上書きする
     max_col_to_check = START_DATA_COL + total_output_cols - 1
     for c_idx in range(1, max_col_to_check + 1):
         col_letter = get_column_letter(c_idx)
@@ -358,20 +358,20 @@ def generate_compare_report(project_name, latest_json_path, base_json_path, outp
 
     config = load_project_config(project_dir)
     
-    if not os.path.exists(template_path): return logger_func(f"❌ テンプレートが無い: {template_path}")
-    if not os.path.exists(l_path): return logger_func(f"❌ 最新JSONが無い: {l_path}")
-    if not os.path.exists(b_path): return logger_func(f"❌ 過去JSONが無い: {b_path}")
+    if not os.path.exists(template_path): return logger_func(f"テンプレートが見つかりません: {template_path}")
+    if not os.path.exists(l_path): return logger_func(f"最新の計測JSONが見つかりません: {l_path}")
+    if not os.path.exists(b_path): return logger_func(f"比較元の計測JSONが見つかりません: {b_path}")
 
     try:
         with open(l_path, "r", encoding="utf-8") as f: latest_data = json.load(f)
         with open(b_path, "r", encoding="utf-8") as f: base_data = json.load(f)
     except json.JSONDecodeError:
-        return logger_func("❌ JSONファイルの読み込みに失敗しました。ファイルが壊れていないか確認してください。")
+        return logger_func("JSONファイルの読み込みに失敗しました。ファイルが壊れていないか確認してください。")
 
     latest_events = latest_data.get("events", [])
     base_events = base_data.get("events", [])
     
-    # 🧩 Phase 1: ツールごとに配列を分離
+    # Phase 1: ツールごとに配列を分離
     ga4_new = filter_events_by_type(latest_events, "GA4")
     ga4_old = filter_events_by_type(base_events, "GA4")
     aa_new = filter_events_by_type(latest_events, "AA")
@@ -379,22 +379,22 @@ def generate_compare_report(project_name, latest_json_path, base_json_path, outp
 
     wb = load_workbook(template_path)
     
-    # 💡 どちらのシートを処理対象とするか決定（両方ある場合は両方処理）
+    # どちらのシートを処理対象とするか決定（両方ある場合は両方処理）
     process_targets = []
     if ga4_new or ga4_old:
         if "GA4" in wb.sheetnames:
             process_targets.append(("GA4", ga4_new, ga4_old))
         else:
-            logger_func("⚠️ GA4のデータがありますが、テンプレートに『GA4』シートが無いためスキップします。")
+            logger_func("GA4のデータがありますが、テンプレートに『GA4』シートが無いためスキップします。")
             
     if aa_new or aa_old:
         if "Adobe Analytics" in wb.sheetnames:
             process_targets.append(("Adobe Analytics", aa_new, aa_old))
         else:
-            logger_func("⚠️ Adobeのデータがありますが、テンプレートに『Adobe Analytics』シートが無いためスキップします。")
+            logger_func("Adobeのデータがありますが、テンプレートに『Adobe Analytics』シートが無いためスキップします。")
 
     if not process_targets:
-        return logger_func("❌ 処理できる対象シートとデータの組み合わせが見つかりません。テンプレートのシート名（GA4 / Adobe Analytics）を確認してください。")
+        return logger_func("処理対象のデータに対応するシートが見つかりません。テンプレートのシート名（GA4 / Adobe Analytics）を確認してください。")
 
     keep_sheets = ["表紙"] + [t[0] for t in process_targets]
     for name in list(wb.sheetnames):
@@ -404,9 +404,9 @@ def generate_compare_report(project_name, latest_json_path, base_json_path, outp
     if "表紙" in wb.sheetnames:
         replace_placeholders_in_sheet(wb["表紙"], config)
 
-    # 🔄 ターゲットとなるシート（最大2シート）を順番に処理
+    # ターゲットとなるシート（最大2シート）を順番に処理
     for sheet_name, ev_new, ev_old in process_targets:
-        logger_func(f"📊 シート『{sheet_name}』の突合処理を行っています...")
+        logger_func(f"シート『{sheet_name}』の比較処理を行っています。")
         process_single_sheet(
             ws=wb[sheet_name],
             sheet_name=sheet_name,
@@ -420,14 +420,14 @@ def generate_compare_report(project_name, latest_json_path, base_json_path, outp
     try:
         wb.save(output_excel_path)
     except PermissionError:
-        logger_func(f"❌ 【エラー】出力先のExcelファイル ({output_excel_name}) が開かれています。\nExcelを閉じてから再度実行してください。\n")
+        logger_func(f"【エラー】出力先のExcelファイル ({output_excel_name}) が開かれています。\nExcelを閉じてから再度実行してください。\n")
         return None
 
-    logger_func(f"🎉 比較レポートが完成しました！\n📊 保存先: {output_excel_path}\n")
+    logger_func(f"比較レポートを生成しました。\n保存先: {output_excel_path}\n")
     return output_excel_path
 
 if __name__ == "__main__":
     if len(sys.argv) > 4:
         generate_compare_report(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])
     else:
-        print("💡 使い方: python excel_reporter.py [案件名] [最新JSON名] [過去JSON名] [出力Excel名]")
+        print("使い方: python excel_reporter.py [案件名] [最新JSON名] [過去JSON名] [出力Excel名]")

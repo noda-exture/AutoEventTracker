@@ -14,7 +14,7 @@ from excel_reporter import generate_compare_report
 from display_parts import Ui_MainWindow
 
 # ==========================================
-# ⚙️ 非同期処理ワーカー
+# 非同期処理ワーカー
 # ==========================================
 
 class ReporterWorker(threading.Thread):
@@ -67,7 +67,7 @@ class ScenarioWorker(QThread):
             return_code = process.wait()
             self.finished.emit(return_code == 0)
         except Exception as e:
-            self.log.emit(f"\n❌ 実行エラー: {str(e)}\n")
+            self.log.emit(f"\n実行エラー: {str(e)}\n")
             self.finished.emit(False)
 
 class AutoRecordWorker(QThread):
@@ -98,12 +98,12 @@ class AutoRecordWorker(QThread):
             return_code = process.wait()
             self.finished.emit(return_code == 0)
         except Exception as e:
-            self.log.emit(f"\n❌ 実行エラー (node または record.js が見つかりません): {str(e)}\n")
+            self.log.emit(f"\n実行エラー (node または record.js が見つかりません): {str(e)}\n")
             self.finished.emit(False)
 
 
 # ==========================================
-# 🖥️ メインアプリケーション
+# メインアプリケーション
 # ==========================================
 
 class AutoTrackerApp(QMainWindow):
@@ -155,7 +155,7 @@ class AutoTrackerApp(QMainWindow):
         self.ui.btn_record_auto.clicked.connect(self.start_auto_record)
 
     # ==========================================
-    # ⚙️ ロジック・イベント処理
+    # ロジック・イベント処理
     # ==========================================
     def refresh_project_list(self):
         projects = [f for f in os.listdir("project") if os.path.isdir(os.path.join("project", f))] if os.path.exists("project") else []
@@ -207,13 +207,13 @@ class AutoTrackerApp(QMainWindow):
             self.ui.lbl_info_memo.setText("JSONの解析に失敗したか、ファイルが見つかりません。")
 
     # ------------------------------------------
-    # ✨ 新規/編集モード切替と保存ロジック
+    # 新規/編集モード切替と保存ロジック
     # ------------------------------------------
     def open_create_project_page(self):
         self.is_edit_mode = False
-        self.ui.lbl_page_title.setText("✨ 新規プロジェクトを作成")
-        self.ui.lbl_page_desc.setText("案件用のフォルダ構成と基本設定ファイル（config.json）を自動生成します。")
-        self.ui.btn_confirm_proj.setText("CREATE (作成)")
+        self.ui.lbl_page_title.setText("新規プロジェクトを作成")
+        self.ui.lbl_page_desc.setText("プロジェクト用のフォルダと基本設定ファイル（config.json）を作成します。")
+        self.ui.btn_confirm_proj.setText("プロジェクトを作成")
         
         self.ui.input_proj_id.clear()
         self.ui.input_client.clear()
@@ -231,9 +231,9 @@ class AutoTrackerApp(QMainWindow):
         self.is_edit_mode = True
         self.current_editing_proj = current_proj
         
-        self.ui.lbl_page_title.setText("✏️ プロジェクト設定編集")
-        self.ui.lbl_page_desc.setText("選択中プロジェクトの基本情報およびフォルダ名を編集します。")
-        self.ui.btn_confirm_proj.setText("💾 設定を保存・更新する")
+        self.ui.lbl_page_title.setText("プロジェクト設定を編集")
+        self.ui.lbl_page_desc.setText("選択中のプロジェクトIDと基本情報を編集します。")
+        self.ui.btn_confirm_proj.setText("変更を保存")
 
         config_path = os.path.join("project", current_proj, "config.json")
         client_name = ""
@@ -245,7 +245,7 @@ class AutoTrackerApp(QMainWindow):
                     client_name = cfg.get("client_name", "")
                     task_name = cfg.get("task_name", "")
             except Exception as e:
-                self.log_write(f"⚠️ config.json 読み込み警告: {str(e)}\n")
+                self.log_write(f"config.json 読み込み警告: {str(e)}\n")
 
         self.ui.input_proj_id.setText(current_proj)
         self.ui.input_client.setText(client_name)
@@ -260,7 +260,7 @@ class AutoTrackerApp(QMainWindow):
         task = self.ui.input_task.text().strip() or "課題名未設定"
 
         if not proj_id:
-            QMessageBox.warning(self, "エラー", "フォルダ名 (project_id) は空にできません。")
+            QMessageBox.warning(self, "入力エラー", "プロジェクトIDを入力してください。")
             return
 
         if self.is_edit_mode:
@@ -275,7 +275,7 @@ class AutoTrackerApp(QMainWindow):
                     return
                 try:
                     os.rename(old_dir, new_dir)
-                    self.log_write(f"📁 プロジェクトフォルダ名を変更しました: {old_proj_id} -> {proj_id}\n")
+                    self.log_write(f"プロジェクトフォルダ名を変更しました: {old_proj_id} -> {proj_id}\n")
                 except Exception as e:
                     QMessageBox.critical(self, "リネームエラー", f"フォルダ名の変更に失敗しました:\n{str(e)}")
                     return
@@ -348,7 +348,7 @@ class AutoTrackerApp(QMainWindow):
                     subprocess.call(["open", template_path])
                 else:
                     subprocess.call(["xdg-open", template_path])
-                self.log_write(f"📄 テンプレートファイルを開きました: {template_path}\n")
+                self.log_write(f"テンプレートファイルを開きました: {template_path}\n")
             except Exception as e:
                 QMessageBox.critical(self, "実行エラー", f"ファイルを開く際にエラーが発生しました:\n{str(e)}")
         else:
@@ -394,7 +394,7 @@ class AutoTrackerApp(QMainWindow):
         self.ui.btn_run_analysis.setEnabled(False)
         self.ui.progress.setVisible(True)
         self.ui.txt_log.clear()
-        self.log_write(f"⏳ [{datetime.now().strftime('%H:%M:%S')}] 分析(突合)処理を開始します...\n")
+        self.log_write(f"[{datetime.now().strftime('%H:%M:%S')}] 比較レポートの生成を開始します。\n")
 
         self.analysis_worker = ReporterWorker(proj, f1, f2, out, self.sig_log, self.sig_finish, self.sig_err)
         self.analysis_worker.start()
@@ -402,7 +402,7 @@ class AutoTrackerApp(QMainWindow):
     def on_analysis_finished(self, result_path):
         self.ui.btn_run_analysis.setEnabled(True)
         self.ui.progress.setVisible(False)
-        self.log_write("✨ すべての処理が正常に完了しました！\n")
+        self.log_write("すべての処理が正常に完了しました。\n")
         if result_path and os.path.exists(result_path):
             if sys.platform == "win32": os.startfile(result_path)
             elif sys.platform == "darwin": subprocess.call(["open", result_path])
@@ -410,10 +410,10 @@ class AutoTrackerApp(QMainWindow):
     def on_analysis_error(self, err_msg):
         self.ui.btn_run_analysis.setEnabled(True)
         self.ui.progress.setVisible(False)
-        self.log_write(f"❌ エラーが発生しました:\n{err_msg}\n")
+        self.log_write(f"エラーが発生しました:\n{err_msg}\n")
         QMessageBox.critical(self, "エラー", f"エラーが発生しました:\n{err_msg}")
 
-    # --- 🚀 シナリオ実行処理 ---
+    # --- シナリオ実行処理 ---
     def start_scenario_execution(self):
         proj = self.ui.combo_proj.currentText()
         scenario_file = self.ui.combo_scenario.currentText()
@@ -428,7 +428,7 @@ class AutoTrackerApp(QMainWindow):
         headless_mode = self.ui.chk_headless.isChecked()
         mode_str = "【ヘッドレスモード】" if headless_mode else "【通常モード (画面表示)】"
         
-        self.log_write(f"⏳ [{datetime.now().strftime('%H:%M:%S')}] シナリオ実行を開始します: {scenario_file} {mode_str}\n")
+        self.log_write(f"[{datetime.now().strftime('%H:%M:%S')}] シナリオ実行を開始します: {scenario_file} {mode_str}\n")
         self.log_write("==================================================\n")
         
         self.scenario_worker = ScenarioWorker(proj, scenario_file, headless_mode)
@@ -440,14 +440,14 @@ class AutoTrackerApp(QMainWindow):
         self.ui.btn_exec_scenario.setEnabled(True)
         self.log_write("==================================================\n")
         if success:
-            self.log_write("✨ シナリオの実行が完了しました！出力結果(JSON)は outputs フォルダを確認してください。\n")
+            self.log_write("シナリオの実行が完了しました。計測結果はoutputsフォルダに保存されています。\n")
 
-    # --- ⏺️ 自動シナリオレコーダー 処理 ---
+    # --- 自動シナリオレコーダー処理 ---
     def start_auto_record(self):
         proj = self.ui.combo_proj.currentText()
         filename = self.ui.txt_scenario_file_auto.text().strip()
         url = self.ui.txt_url_auto.text().strip()
-        memo = self.ui.txt_memo_auto.text().strip() # 💡 メモフィールドを取得
+        memo = self.ui.txt_memo_auto.text().strip() # メモフィールドを取得
         
         if not proj:
             QMessageBox.warning(self, "エラー", "対象プロジェクトが選択されていません。")
@@ -464,14 +464,14 @@ class AutoTrackerApp(QMainWindow):
             
         self.ui.btn_record_auto.setEnabled(False)
         self.ui.txt_log.clear()
-        self.log_write(f"⏳ [{datetime.now().strftime('%H:%M:%S')}] 自動レコーダー を起動します...\n")
-        self.log_write(f"🔗 開始URL: {url}\n")
-        self.log_write(f"📁 保存先: project/{proj}/scenario/{filename}\n")
-        if memo: self.log_write(f"💬 メモ: {memo}\n")
+        self.log_write(f"[{datetime.now().strftime('%H:%M:%S')}] 操作レコーダーを起動します。\n")
+        self.log_write(f"開始URL: {url}\n")
+        self.log_write(f"保存先: project/{proj}/scenario/{filename}\n")
+        if memo: self.log_write(f"メモ: {memo}\n")
         self.log_write("==================================================\n")
-        self.log_write("💡 起動したブラウザで操作を行い、終わったらブラウザを閉じてください。\n")
+        self.log_write("起動したブラウザで操作を行い、終わったらブラウザを閉じてください。\n")
         
-        # 💡 引数にmemoを追加してワーカーを起動
+        # 引数にmemoを追加してワーカーを起動
         self.record_worker = AutoRecordWorker(proj, filename, url, memo)
         self.record_worker.log.connect(self.log_write)
         self.record_worker.finished.connect(lambda s, p=proj: self.on_record_finished(s, p))
@@ -481,10 +481,10 @@ class AutoTrackerApp(QMainWindow):
         self.ui.btn_record_auto.setEnabled(True)
         self.log_write("==================================================\n")
         if success:
-            self.log_write("✨ シナリオの自動記録と保存が完了しました！実行タブから確認できます。\n")
+            self.log_write("シナリオを保存しました。「シナリオ実行」タブから確認できます。\n")
             self.update_scenario_list(proj)
         else:
-            self.log_write("⚠️ レコーダーが終了しましたが、エラーが発生した可能性があります。\n")
+            self.log_write("レコーダーが終了しましたが、エラーが発生した可能性があります。\n")
 
 # スタイルシート読み込み補助関数
 def load_stylesheet(app, qss_filename="styles.qss"):
