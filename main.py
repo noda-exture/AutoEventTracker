@@ -11,7 +11,7 @@ from PySide6.QtCore import Signal, QThread
 from PySide6.QtGui import QTextCursor
 
 from excel_reporter import generate_compare_report
-from ui_main import Ui_MainWindow
+from display_parts import Ui_MainWindow
 
 # ==========================================
 # ⚙️ 非同期処理ワーカー

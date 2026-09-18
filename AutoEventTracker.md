@@ -24,7 +24,8 @@
 ```text
 AutoEventTracker/              # 🚀 ツール全体のルートディレクトリ
   │
-  ├── app_main.py              # 司令塔：操作画面（GUI）＆ バッチ処理の切り替え・入り口コード
+  ├── main.py                  # 司令塔：操作画面（GUI）と各処理の入り口コード
+  ├── display_parts.py         # PySide6による画面レイアウト定義
   ├── tracker.py               # エンジン：Playwrightによるブラウザ自動操作・パケット計測コード
   │
   └── project/                 # 📂 案件（クライアント）ごとにフォルダを分けるディレクトリ
@@ -41,7 +42,7 @@ AutoEventTracker/              # 🚀 ツール全体のルートディレクト
 
 ## 📋 各ファイルの役割と要件
 
-### 1. `app_main.py` (メインエントリー)
+### 1. `main.py` (メインエントリー)
 
 * **GUI（手動時）：** 引数なしで起動した場合、以下の画面を提供。
 * 案件（プロジェクト）の選択
@@ -81,6 +82,6 @@ AutoEventTracker/              # 🚀 ツール全体のルートディレクト
 
 ## 🚀 拡張・パッケージ化（GEM / Exe）について
 
-* **Python環境での実行：** `python app_main.py`
+* **Python環境での実行：** `python main.py`
 * **1ファイルexe化：** `PyInstaller` を用いて、すべての依存関係、`tracker.py` を内包した単一の `AutoEventTracker.exe` をビルドします。
 * **GEMライクな配布：** コマンドラインツールとしてパッケージ化する場合、`setup.py`（または `pyproject.toml`）を整備し、`auto-event-tracker` コマンドでどこからでも呼び出せるグローバルCLIツールとして展開可能です。

@@ -4,7 +4,7 @@ from playwright.sync_api import sync_playwright
 from playwright_stealth import stealth_page
 
 def main():
-    # 💡 GUI(gui_qt_advanced.py)から渡されたURLを受け取る (引数がなければ空文字)
+    # 💡 GUI(main.py)から渡されたURLを受け取る (引数がなければ空文字)
     start_url = sys.argv[1] if len(sys.argv) > 1 else ""
 
     # 💡 空で実行した場合、処理終了
