@@ -40,8 +40,9 @@ class DragDropLineEdit(QLineEdit):
 
 class Ui_MainWindow:
     def setupUi(self, main_window):
-        main_window.setWindowTitle("AutoEventTracker - 統合テストスイート")
-        main_window.setFixedSize(900, 860)
+        main_window.setWindowTitle("AutoEventTracker")
+        main_window.setMinimumSize(920, 760)
+        main_window.resize(1040, 880)
 
         self.stacked_widget = QStackedWidget()
         main_window.setCentralWidget(self.stacked_widget)
@@ -57,19 +58,29 @@ class Ui_MainWindow:
     def _setup_main_page(self):
         main_widget = QWidget()
         layout = QVBoxLayout(main_widget)
-        layout.setContentsMargins(28, 24, 28, 24)
-        layout.setSpacing(16)
+        layout.setContentsMargins(32, 28, 32, 28)
+        layout.setSpacing(18)
 
         # ヘッダー
         header_layout = QHBoxLayout()
+        header_layout.setSpacing(16)
+
+        header_text = QVBoxLayout()
+        header_text.setSpacing(2)
+
         title = QLabel("AutoEventTracker")
         title.setObjectName("mainTitle")
-        header_layout.addWidget(title)
+        header_text.addWidget(title)
+
+        header_layout.addLayout(header_text)
         header_layout.addStretch()
         layout.addLayout(header_layout)
 
         # プロジェクト選択バー
-        proj_layout = QHBoxLayout()
+        project_bar = QFrame()
+        project_bar.setObjectName("projectBar")
+        proj_layout = QHBoxLayout(project_bar)
+        proj_layout.setContentsMargins(16, 12, 16, 12)
         proj_layout.setSpacing(12)
         
         lbl_proj = QLabel("📂 対象プロジェクト:")
@@ -88,20 +99,21 @@ class Ui_MainWindow:
         self.btn_create_proj.setObjectName("successBtn")
         self.btn_create_proj.setCursor(Qt.PointingHandCursor)
         proj_layout.addWidget(self.btn_create_proj)
-        proj_layout.addStretch()
-        
-        layout.addLayout(proj_layout)
+        layout.addWidget(project_bar)
 
         # タブエリア
         self.tabs = QTabWidget()
+        self.tabs.setObjectName("workspaceTabs")
+        self.tabs.setDocumentMode(True)
+        self.tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         self.tabs.addTab(self._create_analysis_tab(), "📊 分析 (パケット突合)")
         self.tabs.addTab(self._create_execution_tab(), "🚀 シナリオ実行")
         self.tabs.addTab(self._create_scenario_tab(), "🎬 シナリオ作成")
         layout.addWidget(self.tabs)
 
         # 処理ログ
-        lbl_log = QLabel("📝 処理ログ")
-        lbl_log.setProperty("class", "bold-label")
+        lbl_log = QLabel("処理ログ")
+        lbl_log.setObjectName("logTitle")
         layout.addWidget(lbl_log)
 
         self.txt_log = QTextEdit()
@@ -118,7 +130,7 @@ class Ui_MainWindow:
         layout.setSpacing(16)
         layout.setContentsMargins(20, 24, 20, 20)
 
-        lbl_f1 = QLabel("【現在データ / 新】 (JSONをドロップ or 選択):")
+        lbl_f1 = QLabel("現在データ / NEW")
         lbl_f1.setProperty("class", "bold-label")
         layout.addWidget(lbl_f1)
 
@@ -132,7 +144,7 @@ class Ui_MainWindow:
         row1.addWidget(self.btn_f1)
         layout.addLayout(row1)
 
-        lbl_f2 = QLabel("【過去データ / 旧】 (JSONをドロップ or 選択):")
+        lbl_f2 = QLabel("比較対象データ / BASELINE")
         lbl_f2.setProperty("class", "bold-label")
         layout.addWidget(lbl_f2)
 
@@ -160,7 +172,7 @@ class Ui_MainWindow:
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(12)
-        self.btn_run_analysis = QPushButton("🔥 比較レポートを自動生成する")
+        self.btn_run_analysis = QPushButton("比較レポートを生成")
         self.btn_run_analysis.setObjectName("primaryBtn")
         self.btn_run_analysis.setCursor(Qt.PointingHandCursor)
         
@@ -248,7 +260,7 @@ class Ui_MainWindow:
 
         layout.addWidget(self.info_frame)
 
-        self.btn_exec_scenario = QPushButton("▶️ Playwrightでシナリオを実行")
+        self.btn_exec_scenario = QPushButton("シナリオを実行")
         self.btn_exec_scenario.setObjectName("actionBtn")
         self.btn_exec_scenario.setCursor(Qt.PointingHandCursor)
         layout.addWidget(self.btn_exec_scenario)
@@ -288,19 +300,16 @@ class Ui_MainWindow:
         layout.addWidget(self.txt_memo_auto)
 
         layout.addSpacing(6)
-        self.btn_record_auto = QPushButton("⏺️ 記録開始 (ブラウザを操作して閉じるだけで自動保存)")
+        self.btn_record_auto = QPushButton("ブラウザ操作の記録を開始")
         self.btn_record_auto.setObjectName("dangerBtn")
         self.btn_record_auto.setCursor(Qt.PointingHandCursor)
-        layout.addWidget(self.btn_record_auto)
-
-        desc = QLabel(
-            "💡 ヒント:\n"
-            "・ボタンを押すとブラウザが開きます。普段通りに画面を操作してください。\n"
-            "・操作が終わったら、ブラウザの「×」ボタンで閉じるだけでシナリオJSONが自動生成されます。\n"
-            "・コードのコピペや要素セレクタの手動変換は不要です。"
+        self.btn_record_auto.setToolTip(
+            "ボタンを押すとブラウザが開きます。\n"
+            "普段通りに画面を操作し、完了後にブラウザを閉じてください。\n"
+            "操作内容がシナリオJSONとして自動保存されます。"
         )
-        desc.setObjectName("descLabel")
-        layout.addWidget(desc)
+        self.btn_record_auto.setToolTipDuration(12000)
+        layout.addWidget(self.btn_record_auto)
 
         return tab
 
