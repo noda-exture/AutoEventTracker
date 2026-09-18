@@ -6,6 +6,68 @@ import re
 from urllib.parse import urlparse, parse_qs
 from playwright.sync_api import sync_playwright
 
+def _safe_step_token(value):
+    token = re.sub(r"[^\w-]+", "_", str(value or ""), flags=re.UNICODE).strip("_")
+    return token or "step"
+
+
+def prepare_steps(master_config, project_dir):
+    """Load scenario steps and ensure every step has a stable, unique ID."""
+    loaded_steps = []
+
+    if "include_parts" in master_config:
+        print("パーツJSONの結合を開始します...")
+        for part_rel_path in master_config["include_parts"]:
+            part_path = os.path.join(project_dir, "parts", part_rel_path)
+            if not os.path.exists(part_path):
+                print(f"   エラー: パーツファイル '{part_path}' が見つかりません。処理を中断します。")
+                return []
+
+            with open(part_path, "r", encoding="utf-8") as f:
+                part_data = json.load(f)
+
+            part_steps = part_data.get("steps", [])
+            part_token = _safe_step_token(os.path.splitext(part_rel_path)[0])
+            for local_index, raw_step in enumerate(part_steps):
+                step = dict(raw_step)
+                local_id = step.get("step_id") or f"step_{local_index + 1:04d}"
+                step["step_id"] = f"{part_token}__{_safe_step_token(local_id)}"
+                loaded_steps.append(step)
+            print(f"   結合成功: {part_rel_path} ({len(part_steps)} steps)")
+    else:
+        loaded_steps = [dict(step) for step in master_config.get("steps", [])]
+
+    prepared_steps = []
+    used_ids = set()
+    for index, step in enumerate(loaded_steps):
+        base_id = _safe_step_token(step.get("step_id") or f"step_{index + 1:04d}")
+        step_id = base_id
+        suffix = 2
+        while step_id in used_ids:
+            step_id = f"{base_id}_{suffix}"
+            suffix += 1
+        used_ids.add(step_id)
+
+        step["step_id"] = step_id
+        step["step_name"] = step.get("step_name") or step.get("memo") or step.get("action", f"Step {index + 1}")
+        prepared_steps.append(step)
+
+    return prepared_steps
+
+
+def wait_for_analytics_quiet(page, capture_state, quiet_ms=800, max_wait_ms=3000):
+    """Wait until analytics traffic has been quiet long enough for the active step."""
+    started_at = time.monotonic()
+    while True:
+        now = time.monotonic()
+        last_request_at = capture_state.get("last_request_at") or started_at
+        if (now - last_request_at) * 1000 >= quiet_ms:
+            return
+        if (now - started_at) * 1000 >= max_wait_ms:
+            return
+        page.wait_for_timeout(100)
+
+
 def run_tracker(project_name, config_filename, headless=False):
     """
     Args:
@@ -24,27 +86,7 @@ def run_tracker(project_name, config_filename, headless=False):
     with open(config_path, "r", encoding="utf-8") as f:
         master_config = json.load(f)
     
-    combined_steps = []
-    
-    # パターンA: 中間JSONに "include_parts" がある場合、パーツを順に読み込んで結合
-    if "include_parts" in master_config:
-        print("パーツJSONの結合を開始します...")
-        for part_rel_path in master_config["include_parts"]:
-            # 各パーツファイルの絶対パスを構築
-            part_path = os.path.join(project_dir, "parts", part_rel_path)
-            
-            if os.path.exists(part_path):
-                with open(part_path, "r", encoding="utf-8") as f:
-                    part_data = json.load(f)
-                    if "steps" in part_data:
-                        combined_steps.extend(part_data["steps"])
-                        print(f"   結合成功: {part_rel_path} ({len(part_data['steps'])} steps)")
-            else:
-                print(f"   エラー: パーツファイル '{part_path}' が見つかりません。処理を中断します。")
-                return
-    else:
-        # パターンB: 中間JSON自体に直接 "steps" が書かれている従来型への互換性ケア
-        combined_steps = master_config.get("steps", [])
+    combined_steps = prepare_steps(master_config, project_dir)
 
     if not combined_steps:
         print("エラー: 実行すべきステップが空です。")
@@ -58,8 +100,24 @@ def run_tracker(project_name, config_filename, headless=False):
         print(f"\nシナリオ実行（{attempt + 1}/{max_retries}回目） ───")
         
         analytics_logs = []
-        # 現在実行中のステップインデックス（Phase2用マトリクス突合のキー）
-        current_step_index = 0
+        capture_state = {
+            "step_index": -1,
+            "step_id": "initial_load",
+            "step_name": "開始ページの読み込み",
+            "packet_index": 0,
+            "last_request_at": None,
+        }
+
+        def append_analytics_log(log_entry):
+            log_entry.update({
+                "step_index": capture_state["step_index"],
+                "step_id": capture_state["step_id"],
+                "step_name": capture_state["step_name"],
+                "packet_index_in_step": capture_state["packet_index"],
+            })
+            capture_state["packet_index"] += 1
+            capture_state["last_request_at"] = time.monotonic()
+            analytics_logs.append(log_entry)
 
         # ネットワークリクエストを監視するコールバック関数
         def handle_request(request):
@@ -74,14 +132,13 @@ def run_tracker(project_name, config_filename, headless=False):
                 
                 log_entry = {
                     "type": "GA4",
-                    "step_index": current_step_index, # 現在のステップ番号を刻印
                     "method": method,
                     "url": url,
                     "params": {k: v[0] for k, v in params.items()},
                     "post_data": post_data,
                     "timestamp": time.time()
                 }
-                analytics_logs.append(log_entry)
+                append_analytics_log(log_entry)
                 print("    [GA4 検知] イベントが送信されました")
 
             # ② 従来型 Adobe Analytics の通信を検知
@@ -91,13 +148,12 @@ def run_tracker(project_name, config_filename, headless=False):
                 
                 log_entry = {
                     "type": "Adobe Analytics (Legacy)",
-                    "step_index": current_step_index, # 現在のステップ番号を刻印
                     "method": method,
                     "url": url,
                     "params": {k: v[0] for k, v in params.items()},
                     "timestamp": time.time()
                 }
-                analytics_logs.append(log_entry)
+                append_analytics_log(log_entry)
                 print("    [Adobe Analytics 検知] ビーコンが送信されました")
 
             # ③ AEP Web SDK (Adobe Edge Network) の通信を検知
@@ -111,13 +167,12 @@ def run_tracker(project_name, config_filename, headless=False):
 
                 log_entry = {
                     "type": "AEP Web SDK",
-                    "step_index": current_step_index, # 現在のステップ番号を刻印
                     "method": method,
                     "url": url,
                     "xdm_payload": xdm_payload,
                     "timestamp": time.time()
                 }
-                analytics_logs.append(log_entry)
+                append_analytics_log(log_entry)
                 print("    [AEP Web SDK 検知] Edge Networkへの通信を検知しました")
 
         output_dir = os.path.join(project_dir, "outputs")
@@ -158,13 +213,13 @@ def run_tracker(project_name, config_filename, headless=False):
             try:
                 page.goto(master_config.get('start_url', ''))
                 page.wait_for_load_state("domcontentloaded")
+                wait_for_analytics_quiet(page, capture_state)
             except Exception as e:
                 print(f"   初期ページを読み込めませんでした: {e}")
                 browser.close()
                 continue
             
             for i, step in enumerate(combined_steps):
-                current_step_index = i # グローバル変数に現在のステップ番号をセット
                 action = step["action"]
                 selector = step.get("selector")
                 value = step.get("value")
@@ -176,7 +231,16 @@ def run_tracker(project_name, config_filename, headless=False):
                 print(step_log)
                 
                 try:
+                    # 前ステップの遅延通信を前ステップ側で収束させる
                     page.wait_for_timeout(1000)
+                    capture_state.update({
+                        "step_index": i,
+                        "step_id": step["step_id"],
+                        "step_name": step["step_name"],
+                        "packet_index": 0,
+                        "last_request_at": None,
+                    })
+                    before_count = len(analytics_logs)
 
                     if action == "switch_window":
                         target_name = value
@@ -201,6 +265,9 @@ def run_tracker(project_name, config_filename, headless=False):
                             print("         -> ページのロード完了を確認しました。")
                         except Exception:
                             print("         -> ロード待ちがタイムアウトしました。処理を続行します。")
+                        wait_for_analytics_quiet(page, capture_state)
+                        after_count = len(analytics_logs)
+                        print(f"      (このステップで検知した計測通信: {after_count - before_count} 件)")
                         continue
 
                     target_loc = None
@@ -218,8 +285,6 @@ def run_tracker(project_name, config_filename, headless=False):
                             else:
                                 raise e_timeout
                         
-                    before_count = len(analytics_logs)
-                    
                     if action == "click":
                         try:
                             with context.expect_page(timeout=2000) as new_page_info:
@@ -243,6 +308,7 @@ def run_tracker(project_name, config_filename, headless=False):
                         target_loc.fill(value, timeout=15000)
                         target_loc.press("Tab")
                     
+                    wait_for_analytics_quiet(page, capture_state)
                     after_count = len(analytics_logs)
                     print(f"      (このステップで検知した計測通信: {after_count - before_count} 件)")
                     
@@ -253,9 +319,12 @@ def run_tracker(project_name, config_filename, headless=False):
 
             if not step_error_occurred:
                 output_data = {
+                    "schema_version": 2,
                     "project": project_name,
                     "scenario": config_filename,
                     "memo": master_config.get("memo", ""),
+                    "step_capture_mode": "stable_step_id",
+                    "scenario_step_ids": [step["step_id"] for step in combined_steps],
                     "executed_steps": combined_steps,
                     "total_events_captured": len(analytics_logs),
                     "events": analytics_logs

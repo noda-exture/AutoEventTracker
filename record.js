@@ -20,6 +20,8 @@ let steps = [];
 let windowCounter = 1;
 let isSaved = false;
 
+const nextStepId = () => `step_${String(steps.length + 1).padStart(4, '0')}`;
+
 (async () => {
   console.log(`レコーダーを起動します...`);
   console.log(`対象URL: ${startUrl}`);
@@ -77,6 +79,8 @@ let isSaved = false;
     if (eventData.text) memo += ` (${eventData.text})`;
 
     let step = {
+      step_id: nextStepId(),
+      step_name: memo,
       action: eventData.action,
       selector: eventData.selector,
       memo: memo,
@@ -97,10 +101,13 @@ let isSaved = false;
   context.on('page', async (newPage) => {
     if (steps.length > 0) {
       const winName = `page${windowCounter++}`;
+      const memo = `別ウィンドウ [${winName}] へ切り替え`;
       steps.push({
+        step_id: nextStepId(),
+        step_name: memo,
         action: 'switch_window',
         value: winName,
-        memo: `別ウィンドウ [${winName}] へ切り替え`
+        memo: memo
       });
       console.log(`[記録] 別ウィンドウのオープンを検知しました`);
     }
