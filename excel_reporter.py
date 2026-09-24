@@ -345,7 +345,9 @@ def _group_events(events):
     groups = {}
     for event in events:
         step_index = int(event.get("step_index", 0) or 0)
-        step_id = str(event.get("step_id") or f"legacy_step_{step_index + 1:04d}")
+        step_id = str(event.get("step_id") or f"legacy_{step_index + 1:04d}")
+        if step_id.startswith("step_") and len(step_id) > len("step_"):
+            step_id = step_id[len("step_"):]
         if step_id not in groups:
             groups[step_id] = {
                 "step_id": step_id,

@@ -8,7 +8,7 @@ from excel_reporter import (
     packet_identity,
     process_single_sheet,
 )
-from tracker import prepare_steps
+from tracker import PageRegistry, click_first_actionable, prepare_steps
 
 
 def ga4_packet(event_name, sequence, step_id="step_0001", step_index=0, page="/checkout"):
@@ -58,19 +58,86 @@ def aep_packet(event_type, sequence):
 
 
 class PacketMatchingTests(unittest.TestCase):
+    def test_click_tries_next_matching_element_when_first_is_blocked(self):
+        class Candidate:
+            def __init__(self, blocked=False):
+                self.blocked = blocked
+                self.clicked = False
+
+            def click(self, timeout):
+                if self.blocked:
+                    raise RuntimeError("intercepts pointer events")
+                self.clicked = True
+
+        class Locator:
+            def __init__(self, candidates):
+                self.candidates = candidates
+
+            @property
+            def first(self):
+                return self.candidates[0]
+
+            def count(self):
+                return len(self.candidates)
+
+            def nth(self, index):
+                return self.candidates[index]
+
+        blocked = Candidate(blocked=True)
+        actionable = Candidate()
+
+        click_first_actionable(Locator([blocked, actionable]))
+
+        self.assertFalse(blocked.clicked)
+        self.assertTrue(actionable.clicked)
+
+    def test_page_registry_assigns_stable_ids_and_excludes_closed_tabs(self):
+        class FakePage:
+            def __init__(self):
+                self.closed = False
+
+            def is_closed(self):
+                return self.closed
+
+        main = FakePage()
+        popup = FakePage()
+        another_popup = FakePage()
+        registry = PageRegistry(main)
+
+        self.assertEqual(registry.page_id_for(main), "main")
+        self.assertEqual(registry.register(popup), "page1")
+        self.assertEqual(registry.register(popup), "page1")
+        self.assertEqual(registry.register(another_popup), "page2")
+
+        popup.closed = True
+        self.assertIsNone(registry.get_live("page1"))
+        self.assertEqual(set(registry.live_pages()), {"main", "page2"})
+
     def test_missing_step_ids_are_added_without_overwriting_existing_ids(self):
         scenario = {
             "steps": [
-                {"action": "click", "memo": "first"},
+                {"action": "click", "memo": "first", "page_id": "main"},
                 {"step_id": "saved-step", "action": "fill", "memo": "second"},
             ]
         }
 
         steps = prepare_steps(scenario, project_dir="unused")
 
-        self.assertEqual(steps[0]["step_id"], "step_0001")
+        self.assertEqual(steps[0]["step_id"], "0001")
         self.assertEqual(steps[0]["step_name"], "first")
+        self.assertEqual(steps[0]["page_id"], "main")
         self.assertEqual(steps[1]["step_id"], "saved-step")
+
+    def test_existing_step_prefix_is_removed_during_preparation(self):
+        scenario = {
+            "steps": [
+                {"step_id": "step_0042", "action": "click", "memo": "legacy"},
+            ]
+        }
+
+        steps = prepare_steps(scenario, project_dir="unused")
+
+        self.assertEqual(steps[0]["step_id"], "0042")
 
     def test_extra_packet_does_not_shift_following_matches(self):
         baseline = [
@@ -165,6 +232,17 @@ class PacketMatchingTests(unittest.TestCase):
 
         self.assertEqual(len(groups), 1)
         self.assertEqual(groups[0]["step_id"], "purchase_step")
+        self.assertEqual(len(groups[0]["new"]), 1)
+        self.assertEqual(len(groups[0]["old"]), 1)
+
+    def test_prefixed_and_unprefixed_step_ids_align(self):
+        latest = [ga4_packet("purchase", 0, step_id="0001", step_index=4)]
+        baseline = [ga4_packet("purchase", 0, step_id="step_0001", step_index=3)]
+
+        groups = align_step_groups(latest, baseline)
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["step_id"], "0001")
         self.assertEqual(len(groups[0]["new"]), 1)
         self.assertEqual(len(groups[0]["old"]), 1)
 

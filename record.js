@@ -19,8 +19,56 @@ if (!proj || !fileName || !startUrl) {
 let steps = [];
 let windowCounter = 1;
 let isSaved = false;
+let mainPage = null;
+let activePageName = null;
+const pageNames = new Map();
+const pendingClosedPages = [];
 
-const nextStepId = () => `step_${String(steps.length + 1).padStart(4, '0')}`;
+const nextStepId = () => String(steps.length + 1).padStart(4, '0');
+
+const registerPage = (page) => {
+  if (pageNames.has(page)) return pageNames.get(page);
+
+  const pageName = mainPage === null ? 'main' : `page${windowCounter++}`;
+  if (mainPage === null) mainPage = page;
+  pageNames.set(page, pageName);
+  console.log(`[タブ] ${pageName} を登録しました`);
+  return pageName;
+};
+
+const pushSwitchStep = (pageName) => {
+  if (!pageName || activePageName === pageName) return;
+  const memo = pageName === 'main'
+    ? 'メインタブへ切り替え'
+    : `別タブ [${pageName}] へ切り替え`;
+  steps.push({
+    step_id: nextStepId(),
+    step_name: memo,
+    action: 'switch_window',
+    value: pageName,
+    page_id: pageName,
+    memo: memo,
+  });
+  activePageName = pageName;
+  console.log(`[記録] switch_window -> ${pageName}`);
+};
+
+const flushClosedPages = () => {
+  while (pendingClosedPages.length > 0) {
+    const pageName = pendingClosedPages.shift();
+    const memo = `${pageName} を閉じる`;
+    steps.push({
+      step_id: nextStepId(),
+      step_name: memo,
+      action: 'close_window',
+      value: pageName,
+      page_id: pageName,
+      memo: memo,
+    });
+    if (activePageName === pageName) activePageName = null;
+    console.log(`[記録] close_window -> ${pageName}`);
+  }
+};
 
 (async () => {
   console.log(`レコーダーを起動します...`);
@@ -47,6 +95,8 @@ const nextStepId = () => `step_${String(steps.length + 1).padStart(4, '0')}`;
     const finalMemo = inputMemo ? inputMemo : "自動レコーダーによってキャプチャされたシナリオ";
 
     const outputData = {
+      schema_version: 2,
+      tab_capture_mode: 'stable_page_id',
       scenario_name: safeFileName.replace('.json', ''),
       start_url: startUrl,
       memo: finalMemo,
@@ -74,7 +124,11 @@ const nextStepId = () => `step_${String(steps.length + 1).padStart(4, '0')}`;
     process.exit(0);
   };
 
-  await context.exposeFunction('notifyNodeEvent', (eventData) => {
+  await context.exposeBinding('notifyNodeEvent', ({ page }, eventData) => {
+    const pageName = registerPage(page);
+    flushClosedPages();
+    pushSwitchStep(pageName);
+
     let memo = `${eventData.tag} を操作`;
     if (eventData.text) memo += ` (${eventData.text})`;
 
@@ -83,6 +137,7 @@ const nextStepId = () => `step_${String(steps.length + 1).padStart(4, '0')}`;
       step_name: memo,
       action: eventData.action,
       selector: eventData.selector,
+      page_id: pageName,
       memo: memo,
     };
     if (eventData.value !== undefined) {
@@ -98,39 +153,64 @@ const nextStepId = () => `step_${String(steps.length + 1).padStart(4, '0')}`;
     console.log(`[記録] ${step.action} -> ${step.selector}`);
   });
 
-  context.on('page', async (newPage) => {
-    if (steps.length > 0) {
-      const winName = `page${windowCounter++}`;
-      const memo = `別ウィンドウ [${winName}] へ切り替え`;
-      steps.push({
-        step_id: nextStepId(),
-        step_name: memo,
-        action: 'switch_window',
-        value: winName,
-        memo: memo
-      });
-      console.log(`[記録] 別ウィンドウのオープンを検知しました`);
-    }
-
-    await newPage.addInitScript(() => {
+  await context.addInitScript(() => {
       if (window.__AUTOREC_INIT) return;
       window.__AUTOREC_INIT = true;
 
       const getSelector = (el) => {
+        const escapeAttribute = (value) => String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        const isUnique = (selector) => {
+          try {
+            return document.querySelectorAll(selector).length === 1;
+          } catch (_) {
+            return false;
+          }
+        };
+        const getUniqueCssPath = (element) => {
+          const parts = [];
+          let current = element;
+          while (current && current.nodeType === Node.ELEMENT_NODE && current !== document.body) {
+            let part = current.tagName.toLowerCase();
+            const siblings = current.parentElement
+              ? Array.from(current.parentElement.children).filter((child) => child.tagName === current.tagName)
+              : [];
+            if (siblings.length > 1) {
+              part += `:nth-of-type(${siblings.indexOf(current) + 1})`;
+            }
+            parts.unshift(part);
+            const selector = parts.join(' > ');
+            if (isUnique(selector)) return selector;
+            current = current.parentElement;
+          }
+          return parts.join(' > ') || element.tagName.toLowerCase();
+        };
+
         if (el.id) return `[id="${el.id}"]`;
         if (el.getAttribute('data-testid')) return `[data-testid="${el.getAttribute('data-testid')}"]`;
         if (el.getAttribute('placeholder')) return `[placeholder="${el.getAttribute('placeholder')}"]`;
         if (el.name) return `[name="${el.name}"]`;
         if (el.getAttribute('aria-label')) return `${el.tagName.toLowerCase()}[aria-label="${el.getAttribute('aria-label')}"]`;
+
+        if (el.tagName === 'A' && el.getAttribute('href')) {
+          const hrefSelector = `a[href="${escapeAttribute(el.getAttribute('href'))}"]`;
+          if (isUnique(hrefSelector)) return hrefSelector;
+        }
         
         const text = el.innerText ? el.innerText.trim().split('\n')[0].trim() : '';
         if (text && text.length > 0 && text.length < 30) {
             const cleanText = text.replace(/"/g, '\\"');
             const tag = el.tagName.toLowerCase();
-            if (tag === 'a') return `a:has-text("${cleanText}")`;
-            if (tag === 'button' || el.getAttribute('role') === 'button') return `button:has-text("${cleanText}")`;
+            const textTag = tag === 'a' ? 'a' : (tag === 'button' || el.getAttribute('role') === 'button' ? 'button' : tag);
+            const matchingTextElements = Array.from(document.querySelectorAll(textTag)).filter((candidate) =>
+              (candidate.innerText || '').includes(text)
+            );
+            if (tag === 'a' && matchingTextElements.length === 1) return `a:has-text("${cleanText}")`;
+            if ((tag === 'button' || el.getAttribute('role') === 'button') && matchingTextElements.length === 1) {
+              return `button:has-text("${cleanText}")`;
+            }
             if (tag !== 'select' && tag !== 'input') {
-                return `${tag}:has-text("${cleanText}")`;
+                if (matchingTextElements.length === 1) return `${tag}:has-text("${cleanText}")`;
+                return getUniqueCssPath(el);
             }
         }
         
@@ -139,7 +219,7 @@ const nextStepId = () => `step_${String(steps.length + 1).padStart(4, '0')}`;
             const classes = el.className.trim().split(/\s+/).filter(c => c).join('.');
             if (classes) pathStr += '.' + classes;
         }
-        return pathStr;
+        return isUnique(pathStr) ? pathStr : getUniqueCssPath(el);
       };
 
       document.addEventListener('click', (e) => {
@@ -153,7 +233,7 @@ const nextStepId = () => `step_${String(steps.length + 1).padStart(4, '0')}`;
         }
         if (!el || el === document.body) el = e.target;
 
-        window.notifyNodeEvent({
+        void window.notifyNodeEvent({
           action: 'click',
           selector: getSelector(el),
           tag: el.tagName.toLowerCase(),
@@ -166,20 +246,20 @@ const nextStepId = () => `step_${String(steps.length + 1).padStart(4, '0')}`;
         const selector = getSelector(el);
         
         if (el.tagName === 'SELECT') {
-          window.notifyNodeEvent({
+          void window.notifyNodeEvent({
             action: 'select',
             selector: selector,
             value: el.value,
             tag: 'select'
           });
         } else if (el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio')) {
-          window.notifyNodeEvent({
+          void window.notifyNodeEvent({
             action: 'click', 
             selector: selector,
             tag: 'input'
           });
         } else if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
-          window.notifyNodeEvent({
+          void window.notifyNodeEvent({
             action: 'fill',
             selector: selector,
             value: el.value,
@@ -187,14 +267,30 @@ const nextStepId = () => `step_${String(steps.length + 1).padStart(4, '0')}`;
           });
         }
       }, true);
+  });
+
+  context.on('page', (newPage) => {
+    const pageName = registerPage(newPage);
+    console.log(`[タブ] 新しいタブ ${pageName} を検知しました`);
+
+    newPage.on('close', () => {
+      if (isSaved) return;
+
+      const remainingPages = context.pages().filter((candidate) => !candidate.isClosed());
+      if (remainingPages.length === 0) {
+        void saveScenario();
+        return;
+      }
+
+      pendingClosedPages.push(pageName);
     });
   });
 
   const page = await context.newPage();
+  registerPage(page);
+  activePageName = 'main';
   await page.goto(startUrl);
 
-  //  【修正】メインのページ（タブ）が閉じられた時点で即座に保存処理を走らせる
-  page.on('close', saveScenario);
   context.on('close', saveScenario);
   browser.on('disconnected', saveScenario);
   
