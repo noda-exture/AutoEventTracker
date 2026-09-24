@@ -8,6 +8,9 @@ from excel_reporter import (
     packet_identity,
     process_single_sheet,
 )
+from measurement_adapters import get_registered_adapters
+from measurement_adapters.base import MeasurementAdapter
+from measurement_adapters.ga4 import GA4Adapter
 from tracker import PageRegistry, click_first_actionable, prepare_steps
 
 
@@ -58,6 +61,87 @@ def aep_packet(event_type, sequence):
 
 
 class PacketMatchingTests(unittest.TestCase):
+    def test_builtin_measurement_adapters_are_registered_independently(self):
+        adapters = {adapter.key: adapter for adapter in get_registered_adapters()}
+
+        self.assertEqual(set(adapters), {"GA4", "AA"})
+        self.assertEqual(adapters["GA4"].sheet_name, "GA4")
+        self.assertEqual(adapters["AA"].sheet_name, "Adobe Analytics")
+
+    def test_ga4_adapter_extracts_post_body_parameters(self):
+        adapter = GA4Adapter()
+        packet = {
+            "type": "GA4",
+            "url": "https://www.google-analytics.com/g/collect?tid=G-TEST",
+            "post_data": "en=purchase&value=1200",
+        }
+
+        self.assertEqual(adapter.extract_value(packet, {"source_key": "en"}), "purchase")
+        self.assertEqual(adapter.packet_identity(packet)["event"], "purchase")
+
+    def test_sheet_processing_accepts_an_unregistered_adapter(self):
+        class CustomAdapter(MeasurementAdapter):
+            key = "CUSTOM"
+            sheet_name = "Custom Analytics"
+            display_name = "Custom Analytics"
+
+            def matches_event(self, event):
+                return event.get("type") == self.key
+
+            def extract_value(self, packet, mapping):
+                if not packet:
+                    return None
+                return packet.get("params", {}).get(mapping["source_key"])
+
+            def packet_identity(self, packet):
+                if not packet:
+                    return {}
+                return {
+                    "tool": self.key,
+                    "source": self.display_name,
+                    "event": packet.get("params", {}).get("event", ""),
+                    "page": "",
+                    "url": "",
+                    "account": "",
+                    "events": "",
+                }
+
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "Custom Analytics"
+        sheet.append([])
+        sheet.append(["Key", "Path", "Data", "項目", "説明"])
+        sheet.append(["event", "", "", "イベント名", "送信イベント"])
+        latest = {
+            "type": "CUSTOM",
+            "step_id": "0001",
+            "step_index": 0,
+            "packet_index_in_step": 0,
+            "params": {"event": "purchase"},
+        }
+        config = {
+            "excel_setting": {
+                "font_name": "游ゴシック",
+                "theme_color_new": "E2EFDA",
+                "theme_color_old": "FFF2CC",
+                "diff_color": "FFC7CE",
+                "diff_font_color": "9C0006",
+            },
+            "extraction_rules": {"ignore_params": [], "nested_separator": "."},
+        }
+
+        process_single_sheet(
+            sheet,
+            CustomAdapter(),
+            [latest],
+            [latest],
+            config,
+            "latest.json",
+            "baseline.json",
+        )
+
+        self.assertEqual(sheet["F3"].value, "purchase")
+
     def test_click_tries_next_matching_element_when_first_is_blocked(self):
         class Candidate:
             def __init__(self, blocked=False):

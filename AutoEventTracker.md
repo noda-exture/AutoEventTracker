@@ -28,6 +28,11 @@ AutoEventTracker/              # ツール全体のルートディレクトリ
   ├── main.py                  # 司令塔：操作画面（GUI）と各処理の入り口コード
   ├── display_parts.py         # PySide6による画面レイアウト定義
   ├── tracker.py               # エンジン：Playwrightによるブラウザ自動操作・パケット計測コード
+  ├── excel_reporter.py        # 共通のExcel比較・書式設定・ファイル出力
+  ├── measurement_adapters/    # 計測サービス別のExcel出力ロジック
+  │    ├── base.py             # アダプター共通インターフェース
+  │    ├── ga4.py              # GA4の判定・値抽出・パケット識別
+  │    └── adobe_analytics.py  # AA / AEP Web SDKの判定・値抽出・パケット識別
   │
   └── project/                 # 案件（クライアント）ごとにフォルダを分けるディレクトリ
        │
@@ -80,6 +85,13 @@ AutoEventTracker/              # ツール全体のルートディレクトリ
 * **上半分：** 現在（新）のデータをステップ・パケット単位で横並びに表示。
 * **下半分：** 比較元（旧）のデータを、上半分と対応する項目・パケット位置に表示。
 * **差分表示：** 現在と比較元の値を参照する条件付き書式の数式を埋め込み、異なる値を自動で色付け。
+
+### 4. `measurement_adapters/` (計測サービス別ロジック)
+
+* **GA4：** `ga4.py` がGA4通信の判定、クエリ・POSTデータからの値抽出、パケット照合用の識別情報生成を担当。
+* **Adobe Analytics / AEP Web SDK：** `adobe_analytics.py` がLegacy AAとAEPの判定、AAパラメータ・XDMからの値抽出、識別情報生成を担当。
+* **共通処理：** `excel_reporter.py` は登録済みアダプターを順番に実行し、ステップの整列、条件付き書式、列表示、Excel保存だけを担当。
+* **サービス追加：** `base.py` の `MeasurementAdapter` を継承したクラスを作り、`register_adapter()` へ登録する。KARTEなどを追加する場合も既存のGA4・AAロジックを変更せず、専用シートと専用アダプターを追加できる。
 
 
 

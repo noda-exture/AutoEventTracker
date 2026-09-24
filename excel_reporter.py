@@ -1,13 +1,15 @@
 import os
 import sys
 import json
-import urllib.parse
 from datetime import datetime
 from functools import lru_cache
 from openpyxl import load_workbook
 from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
+
+from measurement_adapters import get_adapter, get_registered_adapters
+from measurement_adapters.ga4 import parse_query_string
 
 def load_project_config(project_dir):
     config_path = os.path.join(project_dir, "config.json")
@@ -55,66 +57,18 @@ def replace_placeholders_in_sheet(ws, config):
                 cell.value = val_str
 
 def parse_ga4_query_string(raw_str):
-    if not raw_str or not isinstance(raw_str, str): return {}
-    if "?" in raw_str: raw_str = raw_str.split("?")[-1]
-    params = {}
-    for pair in raw_str.split("&"):
-        if "=" in pair:
-            k, v = pair.split("=", 1)
-            params[k] = urllib.parse.unquote(v)
-    return params
+    """後方互換用。GA4固有の解析はGA4Adapterへ移管済み。"""
+    return parse_query_string(raw_str)
 
 def get_nested_value(d, path, separator="."):
-    if not d or not isinstance(d, dict): return None
-    keys = path.split(separator)
-    current = d
-    for key in keys:
-        if isinstance(current, dict) and key in current: current = current[key]
-        else: return None
-    return current
+    """後方互換用。Adobe固有の解析はAdobeAnalyticsAdapterへ移管済み。"""
+    from measurement_adapters.adobe_analytics import get_nested_value as adobe_get_nested_value
+
+    return adobe_get_nested_value(d, path, separator)
 
 def search_value_by_mappings(packet, m_row):
-    if not packet or not isinstance(packet, dict): return None
-    
-    events = packet.get("xdm_payload", {}).get("events", [])
-    if events:
-        first_event = events[0]
-        analytics_data = first_event.get("data", {}).get("__adobe", {}).get("analytics", {})
-        
-        if m_row["data_path"]:
-            val = get_nested_value(first_event, m_row["data_path"])
-            if val is not None: return val
-            
-        if m_row["xdm_path"]:
-            p = m_row["xdm_path"]
-            full_xdm_path = p if p.startswith("xdm.") else f"xdm.{p}"
-            val = get_nested_value(first_event, full_xdm_path)
-            if val is not None: return val
-            
-        if m_row["tool_name"] and m_row["tool_name"] in analytics_data:
-            return analytics_data[m_row["tool_name"]]
-            
-        if m_row["aa_key"] and m_row["aa_key"] in analytics_data:
-            return analytics_data[m_row["aa_key"]]
-            
-        xdm_data = first_event.get("xdm", {})
-        check_key = m_row["aa_key"] or m_row["tool_name"]
-        if check_key == "g" or check_key.lower() == "page url":
-            return xdm_data.get("web", {}).get("webPageDetails", {}).get("URL", None)
-        elif check_key == "r" or check_key.lower() == "referrer":
-            return xdm_data.get("web", {}).get("webReferrer", {}).get("URL", None)
-        elif check_key == "pageName" or check_key.lower() == "page name":
-            return xdm_data.get("web", {}).get("webPageDetails", {}).get("name", None)
-        elif check_key == "events":
-            return analytics_data.get("events", xdm_data.get("eventType", None))
-
-    params = packet.get("params", {})
-    if params:
-        check_key = m_row["aa_key"]
-        if check_key and check_key in params:
-            return params[check_key]
-
-    return None
+    """後方互換用。AdobeAnalyticsAdapterの抽出処理を呼び出す。"""
+    return get_adapter("AA").extract_value(packet, m_row)
 
 def format_extracted_value(val):
     if val is None: return ""
@@ -122,113 +76,13 @@ def format_extracted_value(val):
     return str(val)
 
 def filter_events_by_type(events, target_type):
-    filtered = []
-    for ev in events:
-        ev_type = ev.get("type", "")
-        url_or_raw = ev.get("url", ev.get("raw", ""))
-        
-        is_ga4 = (ev_type == "GA4") or ("tid=G-" in url_or_raw) or ("google-analytics.com" in url_or_raw)
-        is_aa = (ev_type in ["Adobe Analytics (Legacy)", "AEP Web SDK"]) or ("/b/ss/" in url_or_raw) or ("edge.adobedc.net" in url_or_raw)
-        
-        if target_type == "GA4" and is_ga4:
-            filtered.append(ev)
-        elif target_type == "AA" and is_aa:
-            filtered.append(ev)
-    return filtered
-
-def _normalize_url(value):
-    if not value or not isinstance(value, str):
-        return ""
-    try:
-        parsed = urllib.parse.urlparse(value)
-        if not parsed.netloc:
-            return value.split("?", 1)[0].rstrip("/")
-        path = parsed.path.rstrip("/") or "/"
-        return f"{parsed.netloc.lower()}{path}"
-    except Exception:
-        return value.split("?", 1)[0].rstrip("/")
-
-
-def _normalized_events(value):
-    if not value:
-        return ""
-    if isinstance(value, list):
-        values = value
-    else:
-        values = str(value).split(",")
-    names = sorted({str(item).split("=", 1)[0].strip() for item in values if str(item).strip()})
-    return ",".join(names)
-
-
-def _ga4_params(packet):
-    params = {}
-    if not packet:
-        return params
-    params.update(parse_ga4_query_string(packet.get("url", "")))
-    for key, value in packet.get("params", {}).items():
-        params[key] = value[0] if isinstance(value, list) and value else value
-    post_data = packet.get("post_data")
-    if isinstance(post_data, str):
-        params.update(parse_ga4_query_string(post_data))
-    return params
-
-
-def _first_xdm_event(packet):
-    payload = packet.get("xdm_payload", {}) if packet else {}
-    if not isinstance(payload, dict):
-        return {}
-    events = payload.get("events", [])
-    return events[0] if events and isinstance(events[0], dict) else {}
+    """後方互換用。登録済みアダプターへイベント判定を委譲する。"""
+    return get_adapter(target_type).filter_events(events)
 
 
 def packet_identity(packet, target_type):
-    """Return stable semantic fields used to match packets within one step."""
-    if not packet:
-        return {}
-
-    if target_type == "GA4":
-        params = _ga4_params(packet)
-        return {
-            "tool": "GA4",
-            "source": "GA4",
-            "event": str(params.get("en", "")).strip(),
-            "page": str(params.get("dt", "")).strip(),
-            "url": _normalize_url(params.get("dl", "")),
-            "account": str(params.get("tid", "")).strip(),
-            "events": "",
-        }
-
-    packet_type = packet.get("type", "")
-    if packet_type == "AEP Web SDK":
-        first_event = _first_xdm_event(packet)
-        xdm = first_event.get("xdm", {}) if isinstance(first_event, dict) else {}
-        analytics = first_event.get("data", {}).get("__adobe", {}).get("analytics", {}) if isinstance(first_event, dict) else {}
-        page_details = xdm.get("web", {}).get("webPageDetails", {}) if isinstance(xdm, dict) else {}
-        event = xdm.get("eventType") or analytics.get("pev2") or ""
-        return {
-            "tool": "AA",
-            "source": "AEP Web SDK",
-            "event": str(event).strip(),
-            "page": str(page_details.get("name") or analytics.get("pageName") or "").strip(),
-            "url": _normalize_url(page_details.get("URL") or analytics.get("g") or ""),
-            "account": str(analytics.get("rsid") or "").strip(),
-            "events": _normalized_events(analytics.get("events")),
-        }
-
-    params = packet.get("params", {})
-    pe = str(params.get("pe", "")).strip()
-    pev2 = str(params.get("pev2", "")).strip()
-    page_name = str(params.get("pageName", "")).strip()
-    event = f"{pe}:{pev2}" if pe or pev2 else ""
-    return {
-        "tool": "AA",
-        "source": "Adobe Analytics",
-        "event": event,
-        "page": page_name,
-        "url": _normalize_url(params.get("g", "")),
-        "account": str(params.get("rsid") or params.get("s_account") or "").strip(),
-        "events": _normalized_events(params.get("events")),
-    }
+    """後方互換用。計測サービス固有の識別処理をアダプターへ委譲する。"""
+    return get_adapter(target_type).packet_identity(packet)
 
 
 def packet_match_score(packet_new, packet_old, target_type):
@@ -403,16 +257,13 @@ def align_step_groups(events_new, events_old):
 
 
 def packet_display_name(packet, target_type):
-    identity = packet_identity(packet, target_type)
-    label = identity.get("event") or identity.get("page") or identity.get("url") or identity.get("source") or "packet"
-    label = str(label).replace("\n", " ").strip()
-    return label[:48] + ("…" if len(label) > 48 else "")
+    return get_adapter(target_type).packet_display_name(packet)
 
 def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename, base_filename):
     ex_set = config["excel_setting"]
     ext_rules = config["extraction_rules"]
     replace_placeholders_in_sheet(ws, config)
-    is_ga4 = (sheet_name == "GA4")
+    adapter = get_adapter(sheet_name)
     
     START_DATA_COL = 1
     while ws.cell(row=2, column=START_DATA_COL).value:
@@ -422,23 +273,27 @@ def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename
     url_row_idx = None
     for r in range(3, ws.max_row + 1):
         if START_DATA_COL == 4:
-            aa_key = str(ws.cell(row=r, column=1).value or "").strip()
-            tool_name = str(ws.cell(row=r, column=2).value or "").strip()
+            source_key = str(ws.cell(row=r, column=1).value or "").strip()
+            label = str(ws.cell(row=r, column=2).value or "").strip()
             desc = str(ws.cell(row=r, column=3).value or "").strip()
-            xdm_path, data_path = "", ""
+            primary_path, secondary_path = "", ""
         else:
-            aa_key = str(ws.cell(row=r, column=1).value or "").strip()
-            xdm_path = str(ws.cell(row=r, column=2).value or "").strip()
-            data_path = str(ws.cell(row=r, column=3).value or "").strip()
-            tool_name = str(ws.cell(row=r, column=4).value or "").strip()
+            source_key = str(ws.cell(row=r, column=1).value or "").strip()
+            primary_path = str(ws.cell(row=r, column=2).value or "").strip()
+            secondary_path = str(ws.cell(row=r, column=3).value or "").strip()
+            label = str(ws.cell(row=r, column=4).value or "").strip()
             desc = str(ws.cell(row=r, column=5).value or "").strip()
             
-        if aa_key or tool_name:
+        if source_key or label:
             mapping_rows.append({
-                "row_idx": r, "aa_key": aa_key, "tool_name": tool_name,
-                "xdm_path": xdm_path, "data_path": data_path, "desc": desc
+                "row_idx": r,
+                "source_key": source_key,
+                "primary_path": primary_path,
+                "secondary_path": secondary_path,
+                "label": label,
+                "description": desc,
             })
-            if not url_row_idx and (aa_key in ["g", "dl"] or "url" in tool_name.lower()):
+            if not url_row_idx and (source_key in ["g", "dl"] or "url" in label.lower()):
                 url_row_idx = r
 
     OLD_START_ROW = 2 + len(mapping_rows) + 4
@@ -477,7 +332,7 @@ def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename
     aligned_steps = align_step_groups(ev_new, ev_old)
 
     for step_group in aligned_steps:
-        packet_pairs = match_packets_in_step(step_group["new"], step_group["old"], "GA4" if is_ga4 else "AA")
+        packet_pairs = match_packets_in_step(step_group["new"], step_group["old"], adapter)
         if not packet_pairs:
             continue
 
@@ -486,7 +341,7 @@ def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename
 
         for p_idx, (p_new, p_old, _match_score) in enumerate(packet_pairs):
             display_packet = p_new or p_old
-            packet_name = packet_display_name(display_packet, "GA4" if is_ga4 else "AA")
+            packet_name = adapter.packet_display_name(display_packet)
             p_label = f"{step_label}-{p_idx + 1}\n{packet_name}"
             if p_new and not p_old:
                 p_label += "\n[最新のみ]"
@@ -500,23 +355,17 @@ def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename
                 cell_h.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
                 cell_h.border = thin_border
 
-            if is_ga4:
-                parsed_new = parse_ga4_query_string(p_new.get("raw", p_new.get("url", ""))) if p_new else {}
-                parsed_old = parse_ga4_query_string(p_old.get("raw", p_old.get("url", ""))) if p_old else {}
-
             for idx, m_row in enumerate(mapping_rows):
                 row_new = m_row["row_idx"]
                 row_old = OLD_START_ROW + 1 + idx
                 val_new = val_old = ""
-                
-                if is_ga4:
-                    if p_new and m_row["aa_key"] in parsed_new: val_new = parsed_new[m_row["aa_key"]]
-                    if p_old and m_row["aa_key"] in parsed_old: val_old = parsed_old[m_row["aa_key"]]
-                else:
-                    res_new = search_value_by_mappings(p_new, m_row)
-                    res_old = search_value_by_mappings(p_old, m_row)
-                    if res_new is not None: val_new = format_extracted_value(res_new)
-                    if res_old is not None: val_old = format_extracted_value(res_old)
+
+                res_new = adapter.extract_value(p_new, m_row)
+                res_old = adapter.extract_value(p_old, m_row)
+                if res_new is not None:
+                    val_new = format_extracted_value(res_new)
+                if res_old is not None:
+                    val_old = format_extracted_value(res_old)
 
                 c_new = ws.cell(row=row_new, column=current_col, value=val_new)
                 c_old = ws.cell(row=row_old, column=current_col, value=val_old)
@@ -562,7 +411,7 @@ def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename
             ),
         )
 
-        if m_row["aa_key"] not in ext_rules["ignore_params"]:
+        if m_row["source_key"] not in ext_rules["ignore_params"]:
             ws.conditional_formatting.add(
                 new_range,
                 FormulaRule(
@@ -651,7 +500,14 @@ def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename
             ws.column_dimensions[col_letter].width = min(max(max_len + 3, 12), 40)
 
 
-def generate_compare_report(project_name, latest_json_path, base_json_path, output_excel_name, logger_func=print):
+def generate_compare_report(
+    project_name,
+    latest_json_path,
+    base_json_path,
+    output_excel_name,
+    logger_func=print,
+    adapters=None,
+):
     project_dir = os.path.join("project", project_name)
     template_path = os.path.join(project_dir, "template.xlsx")
     
@@ -682,32 +538,33 @@ def generate_compare_report(project_name, latest_json_path, base_json_path, outp
             f"(最新: {latest_scenario} / 比較元: {base_scenario})"
         )
     
-    # Phase 1: ツールごとに配列を分離
-    ga4_new = filter_events_by_type(latest_events, "GA4")
-    ga4_old = filter_events_by_type(base_events, "GA4")
-    aa_new = filter_events_by_type(latest_events, "AA")
-    aa_old = filter_events_by_type(base_events, "AA")
-
     wb = load_workbook(template_path)
-    
-    # どちらのシートを処理対象とするか決定（両方ある場合は両方処理）
+
+    # 登録済みアダプターごとに独立してイベントを抽出し、対応シートを処理する。
     process_targets = []
-    if ga4_new or ga4_old:
-        if "GA4" in wb.sheetnames:
-            process_targets.append(("GA4", ga4_new, ga4_old))
+    configured_adapters = tuple(adapters) if adapters is not None else get_registered_adapters()
+    active_adapters = tuple(get_adapter(adapter) for adapter in configured_adapters)
+    for adapter in active_adapters:
+        events_new = adapter.filter_events(latest_events)
+        events_old = adapter.filter_events(base_events)
+        if not events_new and not events_old:
+            continue
+        if adapter.sheet_name in wb.sheetnames:
+            process_targets.append((adapter, events_new, events_old))
         else:
-            logger_func("GA4のデータがありますが、テンプレートに『GA4』シートが無いためスキップします。")
-            
-    if aa_new or aa_old:
-        if "Adobe Analytics" in wb.sheetnames:
-            process_targets.append(("Adobe Analytics", aa_new, aa_old))
-        else:
-            logger_func("Adobeのデータがありますが、テンプレートに『Adobe Analytics』シートが無いためスキップします。")
+            logger_func(
+                f"{adapter.display_name}のデータがありますが、"
+                f"テンプレートに『{adapter.sheet_name}』シートが無いためスキップします。"
+            )
 
     if not process_targets:
-        return logger_func("処理対象のデータに対応するシートが見つかりません。テンプレートのシート名（GA4 / Adobe Analytics）を確認してください。")
+        supported_sheets = " / ".join(adapter.sheet_name for adapter in active_adapters)
+        return logger_func(
+            "処理対象のデータに対応するシートが見つかりません。"
+            f"テンプレートのシート名（{supported_sheets}）を確認してください。"
+        )
 
-    keep_sheets = ["表紙"] + [t[0] for t in process_targets]
+    keep_sheets = ["表紙"] + [target[0].sheet_name for target in process_targets]
     for name in list(wb.sheetnames):
         if name not in keep_sheets:
             wb.remove(wb[name])
@@ -715,12 +572,11 @@ def generate_compare_report(project_name, latest_json_path, base_json_path, outp
     if "表紙" in wb.sheetnames:
         replace_placeholders_in_sheet(wb["表紙"], config)
 
-    # ターゲットとなるシート（最大2シート）を順番に処理
-    for sheet_name, ev_new, ev_old in process_targets:
-        logger_func(f"シート『{sheet_name}』の比較処理を行っています。")
+    for adapter, ev_new, ev_old in process_targets:
+        logger_func(f"シート『{adapter.sheet_name}』の比較処理を行っています。")
         process_single_sheet(
-            ws=wb[sheet_name],
-            sheet_name=sheet_name,
+            ws=wb[adapter.sheet_name],
+            sheet_name=adapter,
             ev_new=ev_new,
             ev_old=ev_old,
             config=config,
