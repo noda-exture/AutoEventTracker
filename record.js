@@ -152,6 +152,18 @@ const flushClosedPages = () => {
     const lastStep = steps[steps.length - 1];
     if (
       lastStep
+      && lastStep.action === 'fill'
+      && step.action === 'fill'
+      && lastStep.selector === step.selector
+      && lastStep.page_id === step.page_id
+    ) {
+      lastStep.value = step.value;
+      lastStep.step_name = step.step_name;
+      lastStep.memo = step.memo;
+      return;
+    }
+    if (
+      lastStep
       && lastStep.action === step.action
       && lastStep.selector === step.selector
       && JSON.stringify(lastStep.value) === JSON.stringify(step.value)
@@ -306,16 +318,20 @@ const flushClosedPages = () => {
         scrollCaptureTimer = setTimeout(emitScrollCapture, 400);
       };
 
-      document.addEventListener('click', (e) => {
+      const notifyClickFromEvent = (e) => {
         emitScrollCapture();
         const eventPath = e.composedPath();
         const originalTarget = eventPath.find((node) => node instanceof Element) || e.target;
         if (originalTarget.tagName === 'INPUT' && ['text', 'password', 'email'].includes(originalTarget.type)) return;
         if (originalTarget.tagName === 'SELECT') return;
+        const controlLabel = eventPath.find((node) => node instanceof HTMLLabelElement && node.control);
+        if (controlLabel && ['radio', 'checkbox'].includes(controlLabel.control.type)) return;
 
         const el = eventPath.find((node) =>
           node instanceof Element
-          && (node.tagName === 'A' || node.tagName === 'BUTTON' || node.getAttribute('role') === 'button')
+          && (node.tagName === 'A' || node.tagName === 'BUTTON' || node.tagName === 'LABEL'
+            || (node.tagName === 'INPUT' && ['button', 'submit', 'radio', 'checkbox'].includes(node.type))
+            || node.getAttribute('role') === 'button')
         ) || originalTarget;
 
         void window.notifyNodeEvent({
@@ -324,6 +340,41 @@ const flushClosedPages = () => {
           tag: el.tagName.toLowerCase(),
           text: el.innerText?.trim().substring(0, 20)
         });
+      };
+
+      document.addEventListener('pointerdown', (e) => {
+        userScrollIntentUntil = Date.now() + 1000;
+        const path = e.composedPath();
+        const actionable = path.some((node) =>
+          node instanceof Element
+          && (node.tagName === 'A' || node.tagName === 'BUTTON'
+            || node.tagName === 'LABEL'
+            || (node.tagName === 'INPUT' && ['button', 'submit', 'radio', 'checkbox'].includes(node.type))
+            || node.getAttribute('role') === 'button')
+        );
+        if (actionable) notifyClickFromEvent(e);
+      }, { capture: true, passive: true });
+
+      document.addEventListener('click', notifyClickFromEvent, true);
+
+      document.addEventListener('input', (e) => {
+        const el = e.composedPath().find((node) =>
+          node instanceof Element && ['SELECT', 'INPUT', 'TEXTAREA'].includes(node.tagName)
+        ) || e.target;
+        const selector = getSelector(el);
+
+        if (el.tagName === 'SELECT') {
+          void window.notifyNodeEvent({
+            action: 'select', selector, value: el.value, tag: 'select'
+          });
+        } else if (
+          (el.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit'].includes(el.type))
+          || el.tagName === 'TEXTAREA'
+        ) {
+          void window.notifyNodeEvent({
+            action: 'fill', selector, value: el.value, tag: el.tagName.toLowerCase()
+          });
+        }
       }, true);
 
       document.addEventListener('change', (e) => {
@@ -365,7 +416,6 @@ const flushClosedPages = () => {
         markUserScrollIntent();
         queueScrollCapture(event);
       }, { capture: true, passive: true });
-      document.addEventListener('pointerdown', markUserScrollIntent, { capture: true, passive: true });
       document.addEventListener('scroll', (event) => {
         if (Date.now() <= userScrollIntentUntil) queueScrollCapture(event);
       }, { capture: true, passive: true });

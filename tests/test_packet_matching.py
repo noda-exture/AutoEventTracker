@@ -14,8 +14,10 @@ from measurement_adapters.ga4 import GA4Adapter
 from tracker import (
     PageRegistry,
     click_first_actionable,
+    fill_value,
     prepare_steps,
     scroll_page,
+    select_value,
     wait_for_actionable_locator,
 )
 
@@ -383,6 +385,35 @@ class PacketMatchingTests(unittest.TestCase):
         scroll_page(None, {"x": 5, "y": 700}, target)
 
         self.assertEqual(target.calls[0][1], {"x": 5, "y": 700})
+
+    def test_select_value_verifies_the_selected_option(self):
+        class Locator:
+            def __init__(self): self.value = None
+            def select_option(self, value, timeout): self.value = value
+            def input_value(self, timeout): return self.value
+
+        locator = Locator()
+        select_value(locator, "R08")
+
+        self.assertEqual(locator.value, "R08")
+
+    def test_fill_value_verifies_text_and_moves_focus(self):
+        class Locator:
+            def __init__(self):
+                self.value = None
+                self.pressed = None
+                self.clicked = False
+            def click(self, timeout): self.clicked = True
+            def fill(self, value, timeout): self.value = value
+            def input_value(self, timeout): return self.value
+            def press(self, key, timeout): self.pressed = key
+
+        locator = Locator()
+        fill_value(locator, "GB6")
+
+        self.assertEqual(locator.value, "GB6")
+        self.assertEqual(locator.pressed, "Tab")
+        self.assertTrue(locator.clicked)
 
     def test_page_registry_assigns_stable_ids_and_excludes_closed_tabs(self):
         class FakePage:

@@ -149,6 +149,35 @@ def scroll_page(page, value, target_locator=None):
     page.evaluate("amount => window.scrollBy(0, amount)", amount)
 
 
+def select_value(locator, value, timeout_ms=15000):
+    """Select and verify an option value."""
+    expected = str(value)
+    locator.select_option(value=expected, timeout=timeout_ms)
+    actual = locator.input_value(timeout=timeout_ms)
+    if actual != expected:
+        raise RuntimeError(f"プルダウンの値を設定できませんでした（期待値: {expected}、実際: {actual}）")
+
+
+def fill_value(locator, value, timeout_ms=15000):
+    """Fill and verify a text field before moving focus away."""
+    expected = "" if value is None else str(value)
+    locator.click(timeout=timeout_ms)
+    locator.fill(expected, timeout=timeout_ms)
+    actual = locator.input_value(timeout=timeout_ms)
+    if actual != expected:
+        locator.press("ControlOrMeta+A", timeout=timeout_ms)
+        locator.type(expected, delay=30, timeout=timeout_ms)
+        actual = locator.input_value(timeout=timeout_ms)
+    if actual != expected:
+        raise RuntimeError(f"テキスト欄の値を設定できませんでした（期待値: {expected}、実際: {actual}）")
+    locator.press("Tab", timeout=timeout_ms)
+    actual_after_blur = locator.input_value(timeout=timeout_ms)
+    if actual_after_blur != expected:
+        raise RuntimeError(
+            f"テキスト欄の値がフォーカス移動後に変化しました（期待値: {expected}、実際: {actual_after_blur}）"
+        )
+
+
 def _locator_scopes(page):
     """Return the page and its child frames, tolerating simple test doubles."""
     scopes = [page]
@@ -754,15 +783,14 @@ def run_tracker(project_name, config_filename, headless=False):
                     elif action == "change" or action == "select":
                         element_tag = target_loc.evaluate("el => el.tagName.toLowerCase()")
                         if element_tag == "select":
-                            target_loc.select_option(value=value, timeout=action_timeout_ms)
+                            select_value(target_loc, value, timeout_ms=action_timeout_ms)
                             print(f"      選択肢 [{value}] をセレクトボックスから選択しました。")
                         else:
-                            target_loc.fill(value, timeout=action_timeout_ms)
-                            target_loc.press("Enter")
+                            fill_value(target_loc, value, timeout_ms=action_timeout_ms)
                             
                     elif action == "fill":
-                        target_loc.fill(value, timeout=action_timeout_ms)
-                        target_loc.press("Tab")
+                        fill_value(target_loc, value, timeout_ms=action_timeout_ms)
+                        print(f"      テキスト欄に [{value}] を入力しました。")
 
                     elif action == "scroll":
                         scroll_page(page, value, target_loc)
