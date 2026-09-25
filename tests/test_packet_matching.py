@@ -11,7 +11,13 @@ from excel_reporter import (
 from measurement_adapters import get_registered_adapters
 from measurement_adapters.base import MeasurementAdapter
 from measurement_adapters.ga4 import GA4Adapter
-from tracker import PageRegistry, click_first_actionable, prepare_steps
+from tracker import (
+    PageRegistry,
+    click_first_actionable,
+    prepare_steps,
+    scroll_page,
+    wait_for_actionable_locator,
+)
 
 
 def ga4_packet(event_name, sequence, step_id="step_0001", step_index=0, page="/checkout"):
@@ -144,9 +150,13 @@ class PacketMatchingTests(unittest.TestCase):
 
     def test_click_tries_next_matching_element_when_first_is_blocked(self):
         class Candidate:
-            def __init__(self, blocked=False):
+            def __init__(self, blocked=False, visible=True):
                 self.blocked = blocked
+                self.visible = visible
                 self.clicked = False
+
+            def is_visible(self):
+                return self.visible
 
             def click(self, timeout):
                 if self.blocked:
@@ -174,6 +184,205 @@ class PacketMatchingTests(unittest.TestCase):
 
         self.assertFalse(blocked.clicked)
         self.assertTrue(actionable.clicked)
+
+    def test_click_skips_hidden_duplicate_and_uses_visible_element(self):
+        class Candidate:
+            def __init__(self, visible):
+                self.visible = visible
+                self.clicked = False
+
+            def is_visible(self):
+                return self.visible
+
+            def click(self, timeout):
+                self.clicked = True
+
+        class Locator:
+            def __init__(self, candidates):
+                self.candidates = candidates
+
+            def count(self):
+                return len(self.candidates)
+
+            def nth(self, index):
+                return self.candidates[index]
+
+        hidden = Candidate(visible=False)
+        visible = Candidate(visible=True)
+
+        click_first_actionable(Locator([hidden, visible]))
+
+        self.assertFalse(hidden.clicked)
+        self.assertTrue(visible.clicked)
+
+    def test_lazy_loaded_element_is_found_after_progressive_scroll(self):
+        class Candidate:
+            def is_visible(self):
+                return True
+
+            def is_enabled(self):
+                return True
+
+        candidate = Candidate()
+
+        class Locator:
+            def __init__(self, page):
+                self.page = page
+
+            def count(self):
+                return 1 if self.page.scroll_count else 0
+
+            def nth(self, index):
+                return candidate
+
+        class Page:
+            def __init__(self):
+                self.scroll_count = 0
+
+            def locator(self, selector):
+                return Locator(self)
+
+            def evaluate(self, expression, value):
+                self.scroll_count += 1
+
+            def wait_for_timeout(self, timeout):
+                return None
+
+        page = Page()
+
+        result = wait_for_actionable_locator(page, "#lazy-content", timeout_ms=1000)
+
+        self.assertIs(result, candidate)
+        self.assertEqual(page.scroll_count, 1)
+
+    def test_actionable_element_is_found_inside_child_frame(self):
+        class Candidate:
+            def is_visible(self): return True
+            def is_enabled(self): return True
+
+        candidate = Candidate()
+
+        class Locator:
+            def __init__(self, candidates): self.candidates = candidates
+            def count(self): return len(self.candidates)
+            def nth(self, index): return self.candidates[index]
+
+        class Scope:
+            def __init__(self, candidates=None): self.candidates = candidates or []
+            def locator(self, selector): return Locator(self.candidates)
+
+        class Page(Scope):
+            def __init__(self):
+                super().__init__()
+                self.frames = [self, Scope([candidate])]
+
+        self.assertIs(wait_for_actionable_locator(Page(), "#in-frame"), candidate)
+
+    def test_search_reverses_direction_at_end_of_scroll_surface(self):
+        class Candidate:
+            def is_visible(self): return True
+            def is_enabled(self): return True
+
+        candidate = Candidate()
+
+        class Locator:
+            def __init__(self, page): self.page = page
+            def count(self): return 1 if -1 in self.page.directions else 0
+            def nth(self, index): return candidate
+
+        class Page:
+            def __init__(self): self.directions = []
+            def locator(self, selector): return Locator(self)
+            def evaluate(self, expression, value):
+                self.directions.append(value["direction"])
+                return False
+            def wait_for_timeout(self, timeout): return None
+
+        page = Page()
+        result = wait_for_actionable_locator(page, "#virtual-item", timeout_ms=1000)
+
+        self.assertIs(result, candidate)
+        self.assertEqual(page.directions[:2], [1, -1])
+
+    def test_has_text_selector_tolerates_missing_dom_whitespace(self):
+        class Candidate:
+            def evaluate(self, expression, value):
+                return "Tomonaga著者の記事を見る".replace(" ", "").find(value) >= 0
+
+            def is_visible(self): return True
+            def is_enabled(self): return True
+
+        candidate = Candidate()
+
+        class Locator:
+            def __init__(self, candidates): self.candidates = candidates
+            def count(self): return len(self.candidates)
+            def nth(self, index): return self.candidates[index]
+
+        class Page:
+            def locator(self, selector):
+                if selector == "a":
+                    return Locator([candidate])
+                return Locator([])
+
+        result = wait_for_actionable_locator(
+            Page(),
+            'a:has-text("Tomonaga 著者の記事を見る")',
+        )
+
+        self.assertIs(result, candidate)
+
+    def test_href_selector_ignores_changed_analytics_parameters(self):
+        class Candidate:
+            def evaluate(self, expression, value=None):
+                return "https://example.com/service/?_gl=new-value&_ga_TEST=current"
+
+            def is_visible(self): return True
+            def is_enabled(self): return True
+
+        candidate = Candidate()
+
+        class Locator:
+            def __init__(self, candidates): self.candidates = candidates
+            def count(self): return len(self.candidates)
+            def nth(self, index): return self.candidates[index]
+
+        class Page:
+            def locator(self, selector):
+                return Locator([candidate] if selector == "a[href]" else [])
+
+        result = wait_for_actionable_locator(
+            Page(),
+            'a[href="https://example.com/service/?_gl=recorded&_ga_TEST=old"]',
+        )
+
+        self.assertIs(result, candidate)
+
+    def test_scroll_action_supports_absolute_and_relative_positions(self):
+        class Page:
+            def __init__(self):
+                self.calls = []
+
+            def evaluate(self, expression, value):
+                self.calls.append((expression, value))
+
+        page = Page()
+
+        scroll_page(page, {"x": 10, "y": 900})
+        scroll_page(page, 500)
+
+        self.assertEqual(page.calls[0][1], [10, 900])
+        self.assertEqual(page.calls[1][1], 500)
+
+    def test_scroll_action_can_target_a_scroll_container(self):
+        class Locator:
+            def __init__(self): self.calls = []
+            def evaluate(self, expression, value): self.calls.append((expression, value))
+
+        target = Locator()
+        scroll_page(None, {"x": 5, "y": 700}, target)
+
+        self.assertEqual(target.calls[0][1], {"x": 5, "y": 700})
 
     def test_page_registry_assigns_stable_ids_and_excludes_closed_tabs(self):
         class FakePage:

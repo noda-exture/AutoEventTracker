@@ -441,6 +441,13 @@ class AutoTrackerApp(QMainWindow):
         self.log_write("==================================================\n")
         if success:
             self.log_write("シナリオの実行が完了しました。計測結果はoutputsフォルダに保存されています。\n")
+        else:
+            self.log_write("シナリオの実行に失敗しました。計測結果は保存されていません。\n")
+            QMessageBox.warning(
+                self,
+                "シナリオ実行エラー",
+                "シナリオを最後まで実行できませんでした。処理ログを確認してください。",
+            )
 
     # --- 自動シナリオレコーダー処理 ---
     def start_auto_record(self):

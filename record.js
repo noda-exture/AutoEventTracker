@@ -129,8 +129,13 @@ const flushClosedPages = () => {
     flushClosedPages();
     pushSwitchStep(pageName);
 
-    let memo = `${eventData.tag} を操作`;
-    if (eventData.text) memo += ` (${eventData.text})`;
+    let memo;
+    if (eventData.action === 'scroll') {
+      memo = `画面をスクロール (${eventData.value?.y ?? 0}px)`;
+    } else {
+      memo = `${eventData.tag} を操作`;
+      if (eventData.text) memo += ` (${eventData.text})`;
+    }
 
     let step = {
       step_id: nextStepId(),
@@ -145,7 +150,12 @@ const flushClosedPages = () => {
     }
     
     const lastStep = steps[steps.length - 1];
-    if (lastStep && lastStep.action === step.action && lastStep.selector === step.selector && lastStep.value === step.value) {
+    if (
+      lastStep
+      && lastStep.action === step.action
+      && lastStep.selector === step.selector
+      && JSON.stringify(lastStep.value) === JSON.stringify(step.value)
+    ) {
         return;
     }
 
@@ -159,12 +169,24 @@ const flushClosedPages = () => {
 
       const getSelector = (el) => {
         const escapeAttribute = (value) => String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-        const isUnique = (selector) => {
-          try {
-            return document.querySelectorAll(selector).length === 1;
-          } catch (_) {
-            return false;
+        const querySelectorAllDeep = (selector) => {
+          const matches = [];
+          const roots = [document];
+          for (let index = 0; index < roots.length; index += 1) {
+            const root = roots[index];
+            try {
+              matches.push(...root.querySelectorAll(selector));
+            } catch (_) {
+              return [];
+            }
+            for (const candidate of root.querySelectorAll('*')) {
+              if (candidate.shadowRoot) roots.push(candidate.shadowRoot);
+            }
           }
+          return matches;
+        };
+        const isUnique = (selector) => {
+          return querySelectorAllDeep(selector).length === 1;
         };
         const getUniqueCssPath = (element) => {
           const parts = [];
@@ -192,17 +214,40 @@ const flushClosedPages = () => {
         if (el.getAttribute('aria-label')) return `${el.tagName.toLowerCase()}[aria-label="${el.getAttribute('aria-label')}"]`;
 
         if (el.tagName === 'A' && el.getAttribute('href')) {
-          const hrefSelector = `a[href="${escapeAttribute(el.getAttribute('href'))}"]`;
-          if (isUnique(hrefSelector)) return hrefSelector;
+          const rawHref = el.getAttribute('href');
+          const hrefSelector = `a[href="${escapeAttribute(rawHref)}"]`;
+          let containsTrackingParameters = false;
+
+          try {
+            const hrefUrl = new URL(rawHref, document.baseURI);
+            const trackingKeys = [...hrefUrl.searchParams.keys()].filter((key) =>
+              ['_gl', '_ga', '_gcl_au', '_fplc', 'gclid', 'fbclid', 'msclkid'].includes(key.toLowerCase())
+              || key.toLowerCase().startsWith('_ga_')
+              || key.toLowerCase().startsWith('utm_')
+            );
+            if (trackingKeys.length > 0) {
+              containsTrackingParameters = true;
+              const stablePrefix = `${hrefUrl.origin}${hrefUrl.pathname}`;
+              const stableHrefSelector = `a[href^="${escapeAttribute(stablePrefix)}"]`;
+              if (isUnique(stableHrefSelector)) return stableHrefSelector;
+            }
+          } catch (_) {
+            // Relative or malformed URLs fall through to the text/CSS selector.
+          }
+          if (!containsTrackingParameters && isUnique(hrefSelector)) return hrefSelector;
         }
         
-        const text = el.innerText ? el.innerText.trim().split('\n')[0].trim() : '';
-        if (text && text.length > 0 && text.length < 30) {
+        const rawText = el.innerText ? el.innerText.trim() : '';
+        const textLines = rawText.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+        const normalizedText = rawText.replace(/\s+/g, ' ');
+        const textCandidates = [...new Set([textLines[0], normalizedText].filter(Boolean))];
+        for (const text of textCandidates) {
+          if (text.length > 0 && text.length < 80) {
             const cleanText = text.replace(/"/g, '\\"');
             const tag = el.tagName.toLowerCase();
             const textTag = tag === 'a' ? 'a' : (tag === 'button' || el.getAttribute('role') === 'button' ? 'button' : tag);
-            const matchingTextElements = Array.from(document.querySelectorAll(textTag)).filter((candidate) =>
-              (candidate.innerText || '').includes(text)
+            const matchingTextElements = querySelectorAllDeep(textTag).filter((candidate) =>
+              (candidate.innerText || '').trim().replace(/\s+/g, ' ').includes(text)
             );
             if (tag === 'a' && matchingTextElements.length === 1) return `a:has-text("${cleanText}")`;
             if ((tag === 'button' || el.getAttribute('role') === 'button') && matchingTextElements.length === 1) {
@@ -210,8 +255,8 @@ const flushClosedPages = () => {
             }
             if (tag !== 'select' && tag !== 'input') {
                 if (matchingTextElements.length === 1) return `${tag}:has-text("${cleanText}")`;
-                return getUniqueCssPath(el);
             }
+          }
         }
         
         let pathStr = el.tagName.toLowerCase();
@@ -222,16 +267,56 @@ const flushClosedPages = () => {
         return isUnique(pathStr) ? pathStr : getUniqueCssPath(el);
       };
 
-      document.addEventListener('click', (e) => {
-        if (e.target.tagName === 'INPUT' && (e.target.type === 'text' || e.target.type === 'password' || e.target.type === 'email')) return;
-        if (e.target.tagName === 'SELECT') return;
-
-        let el = e.target;
-        while (el && el !== document.body) {
-          if (el.tagName === 'A' || el.tagName === 'BUTTON' || el.getAttribute('role') === 'button') break;
-          el = el.parentElement;
+      let scrollCaptureTimer = null;
+      let pendingScrollTarget = null;
+      let userScrollIntentUntil = 0;
+      const findScrollTarget = (event) => {
+        if (event.type === 'scroll') {
+          return event.target === document ? document.scrollingElement : event.target;
         }
-        if (!el || el === document.body) el = e.target;
+        const path = event.composedPath?.() || [event.target];
+        return path.find((node) => {
+          if (!(node instanceof Element)) return false;
+          const style = getComputedStyle(node);
+          return /(auto|scroll|overlay)/.test(style.overflowY)
+            && node.scrollHeight > node.clientHeight + 2;
+        }) || document.scrollingElement;
+      };
+      const emitScrollCapture = () => {
+        clearTimeout(scrollCaptureTimer);
+        scrollCaptureTimer = null;
+        const target = pendingScrollTarget;
+        if (!target) return;
+        pendingScrollTarget = null;
+        const isPage = target === document.scrollingElement
+          || target === document.documentElement || target === document.body;
+        void window.notifyNodeEvent({
+          action: 'scroll',
+          selector: isPage ? null : getSelector(target),
+          value: {
+            x: Math.round(isPage ? window.scrollX : target.scrollLeft),
+            y: Math.round(isPage ? window.scrollY : target.scrollTop),
+          },
+          tag: isPage ? 'page' : target.tagName.toLowerCase(),
+        });
+      };
+      const queueScrollCapture = (event) => {
+        pendingScrollTarget = findScrollTarget(event);
+        clearTimeout(scrollCaptureTimer);
+        scrollCaptureTimer = setTimeout(emitScrollCapture, 400);
+      };
+
+      document.addEventListener('click', (e) => {
+        emitScrollCapture();
+        const eventPath = e.composedPath();
+        const originalTarget = eventPath.find((node) => node instanceof Element) || e.target;
+        if (originalTarget.tagName === 'INPUT' && ['text', 'password', 'email'].includes(originalTarget.type)) return;
+        if (originalTarget.tagName === 'SELECT') return;
+
+        const el = eventPath.find((node) =>
+          node instanceof Element
+          && (node.tagName === 'A' || node.tagName === 'BUTTON' || node.getAttribute('role') === 'button')
+        ) || originalTarget;
 
         void window.notifyNodeEvent({
           action: 'click',
@@ -242,7 +327,10 @@ const flushClosedPages = () => {
       }, true);
 
       document.addEventListener('change', (e) => {
-        const el = e.target;
+        emitScrollCapture();
+        const el = e.composedPath().find((node) =>
+          node instanceof Element && ['SELECT', 'INPUT', 'TEXTAREA'].includes(node.tagName)
+        ) || e.target;
         const selector = getSelector(el);
         
         if (el.tagName === 'SELECT') {
@@ -265,6 +353,26 @@ const flushClosedPages = () => {
             value: el.value,
             tag: el.tagName.toLowerCase()
           });
+        }
+      }, true);
+
+      const markUserScrollIntent = () => { userScrollIntentUntil = Date.now() + 1000; };
+      document.addEventListener('wheel', (event) => {
+        markUserScrollIntent();
+        queueScrollCapture(event);
+      }, { capture: true, passive: true });
+      document.addEventListener('touchmove', (event) => {
+        markUserScrollIntent();
+        queueScrollCapture(event);
+      }, { capture: true, passive: true });
+      document.addEventListener('pointerdown', markUserScrollIntent, { capture: true, passive: true });
+      document.addEventListener('scroll', (event) => {
+        if (Date.now() <= userScrollIntentUntil) queueScrollCapture(event);
+      }, { capture: true, passive: true });
+      document.addEventListener('keydown', (e) => {
+        if (['PageDown', 'PageUp', 'Home', 'End', 'ArrowDown', 'ArrowUp', ' '].includes(e.key)) {
+          markUserScrollIntent();
+          queueScrollCapture(e);
         }
       }, true);
   });

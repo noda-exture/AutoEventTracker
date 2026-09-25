@@ -3,7 +3,7 @@ import sys
 import json
 import time
 import re
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 from playwright.sync_api import sync_playwright
 
 def _safe_step_token(value):
@@ -75,6 +75,276 @@ def wait_for_analytics_quiet(page, capture_state, quiet_ms=800, max_wait_ms=3000
         page.wait_for_timeout(100)
 
 
+def wait_for_dom_stable(page, quiet_ms=600, max_wait_ms=5000):
+    """Wait until document and open Shadow DOM mutations have stopped briefly."""
+    try:
+        page.evaluate(
+            """
+            ({ quietMs, maxWaitMs }) => new Promise((resolve) => {
+                let quietTimer;
+                let finished = false;
+                const finish = () => {
+                    if (finished) return;
+                    finished = true;
+                    observer.disconnect();
+                    clearTimeout(quietTimer);
+                    clearTimeout(maxTimer);
+                    resolve();
+                };
+                const armQuietTimer = () => {
+                    clearTimeout(quietTimer);
+                    quietTimer = setTimeout(finish, quietMs);
+                };
+                const observer = new MutationObserver((mutations) => {
+                    armQuietTimer();
+                    for (const mutation of mutations) {
+                        for (const node of mutation.addedNodes) observeOpenShadowRoots(node);
+                    }
+                });
+                const options = { childList: true, subtree: true, attributes: true };
+                const observedRoots = new WeakSet();
+                const observeRoot = (root) => {
+                    if (!root || observedRoots.has(root)) return;
+                    observer.observe(root, options);
+                    observedRoots.add(root);
+                };
+                const observeOpenShadowRoots = (node) => {
+                    if (!(node instanceof Element) && !(node instanceof Document)) return;
+                    if (node.shadowRoot) observeRoot(node.shadowRoot);
+                    for (const element of node.querySelectorAll?.('*') || []) {
+                        if (element.shadowRoot) observeRoot(element.shadowRoot);
+                    }
+                };
+                observeRoot(document.documentElement);
+                observeOpenShadowRoots(document);
+                const maxTimer = setTimeout(finish, maxWaitMs);
+                armQuietTimer();
+            })
+            """,
+            {"quietMs": quiet_ms, "maxWaitMs": max_wait_ms},
+        )
+    except Exception:
+        # Navigation or page closure may destroy the execution context.
+        return
+
+
+def scroll_page(page, value, target_locator=None):
+    """Scroll the window or a recorded scroll container."""
+    if target_locator is not None:
+        if isinstance(value, dict):
+            x = int(value.get("x", 0) or 0)
+            y = int(value.get("y", 0) or 0)
+            target_locator.evaluate("(el, position) => el.scrollTo(position.x, position.y)", {"x": x, "y": y})
+        else:
+            target_locator.evaluate("(el, amount) => el.scrollBy(0, amount)", int(value or 0))
+        return
+
+    if isinstance(value, dict):
+        x = int(value.get("x", 0) or 0)
+        y = int(value.get("y", 0) or 0)
+        page.evaluate("([x, y]) => window.scrollTo(x, y)", [x, y])
+        return
+
+    amount = int(value or 0)
+    page.evaluate("amount => window.scrollBy(0, amount)", amount)
+
+
+def _locator_scopes(page):
+    """Return the page and its child frames, tolerating simple test doubles."""
+    scopes = [page]
+    try:
+        for frame in page.frames:
+            if frame not in scopes:
+                scopes.append(frame)
+    except (AttributeError, TypeError):
+        pass
+    return scopes
+
+
+def _advance_scroll_surfaces(page, amount, direction):
+    """Advance the window and visible scroll containers; return whether one moved."""
+    return bool(page.evaluate(
+        """
+        ({ amount, direction }) => {
+            const delta = Math.abs(amount) * direction;
+            const visible = (el) => {
+                const rect = el.getBoundingClientRect();
+                const style = getComputedStyle(el);
+                return rect.width > 0 && rect.height > 0
+                    && style.visibility !== 'hidden' && style.display !== 'none';
+            };
+            const containers = Array.from(document.querySelectorAll('*')).filter((el) => {
+                const style = getComputedStyle(el);
+                return visible(el)
+                    && /(auto|scroll|overlay)/.test(style.overflowY)
+                    && el.scrollHeight > el.clientHeight + 2;
+            }).sort((a, b) => (b.clientWidth * b.clientHeight) - (a.clientWidth * a.clientHeight));
+            const surfaces = [document.scrollingElement, ...containers.slice(0, 8)].filter(Boolean);
+            let moved = false;
+            for (const surface of surfaces) {
+                const before = surface.scrollTop;
+                surface.scrollTop += delta;
+                if (surface.scrollTop !== before) moved = true;
+            }
+            return moved;
+        }
+        """,
+        {"amount": amount, "direction": direction},
+    ))
+
+
+def _whitespace_tolerant_text_candidate(scope, selector, max_candidates=200):
+    """Resolve :has-text selectors even when rendered line breaks omit DOM whitespace."""
+    match = re.fullmatch(r'(?P<tag>[a-zA-Z][\w-]*):has-text\("(?P<text>.*)"\)', selector)
+    if not match:
+        return None
+
+    expected = match.group("text").replace('\\"', '"').replace("\\\\", "\\")
+    expected_without_space = re.sub(r"\s+", "", expected)
+    if not expected_without_space:
+        return None
+
+    candidates = scope.locator(match.group("tag"))
+    for index in range(min(candidates.count(), max_candidates)):
+        candidate = candidates.nth(index)
+        try:
+            text_matches = candidate.evaluate(
+                """
+                (el, expected) => {
+                    const actual = (el.innerText || el.textContent || '').replace(/\s+/g, '');
+                    return actual.includes(expected);
+                }
+                """,
+                expected_without_space,
+            )
+            if text_matches and candidate.is_visible() and candidate.is_enabled():
+                scroll_into_view = getattr(candidate, "scroll_into_view_if_needed", None)
+                if callable(scroll_into_view):
+                    scroll_into_view(timeout=2000)
+                return candidate
+        except Exception:
+            continue
+    return None
+
+
+def _is_tracking_query_key(key):
+    lowered = key.lower()
+    return (
+        lowered in {"_gl", "_ga", "_gcl_au", "_fplc", "gclid", "fbclid", "msclkid"}
+        or lowered.startswith("_ga_")
+        or lowered.startswith("utm_")
+    )
+
+
+def _canonical_url_without_tracking(url):
+    parsed = urlsplit(url)
+    query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+    stable_pairs = [(key, value) for key, value in query_pairs if not _is_tracking_query_key(key)]
+    removed_tracking = len(stable_pairs) != len(query_pairs)
+    canonical = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(stable_pairs), parsed.fragment))
+    return canonical, removed_tracking
+
+
+def _tracking_tolerant_href_candidate(scope, selector, max_candidates=500):
+    """Resolve recorded links after analytics query parameters have changed."""
+    match = re.fullmatch(r'a\[href="(?P<href>.*)"\]', selector)
+    if not match:
+        return None
+
+    expected_href = match.group("href").replace('\\"', '"').replace("\\\\", "\\")
+    expected_canonical, had_tracking = _canonical_url_without_tracking(expected_href)
+    if not had_tracking:
+        return None
+
+    candidates = scope.locator("a[href]")
+    for index in range(min(candidates.count(), max_candidates)):
+        candidate = candidates.nth(index)
+        try:
+            actual_href = candidate.evaluate("el => el.href")
+            actual_canonical, _ = _canonical_url_without_tracking(actual_href)
+            if (
+                actual_canonical == expected_canonical
+                and candidate.is_visible()
+                and candidate.is_enabled()
+            ):
+                scroll_into_view = getattr(candidate, "scroll_into_view_if_needed", None)
+                if callable(scroll_into_view):
+                    scroll_into_view(timeout=2000)
+                return candidate
+        except Exception:
+            continue
+    return None
+
+
+def wait_for_actionable_locator(page, selector, timeout_ms=30000, scroll_step_px=600, max_candidates=20):
+    """Find an actionable target across frames and scroll surfaces in both directions."""
+    deadline = time.monotonic() + timeout_ms / 1000
+    scroll_started = False
+    direction = 1
+    last_direction_change = time.monotonic()
+
+    while time.monotonic() < deadline:
+        for scope in _locator_scopes(page):
+            try:
+                locator = scope.locator(selector)
+                candidate_count = locator.count()
+            except Exception:
+                continue
+            for index in range(min(candidate_count, max_candidates)):
+                candidate = locator.nth(index)
+                try:
+                    if candidate.is_visible() and candidate.is_enabled():
+                        scroll_into_view = getattr(candidate, "scroll_into_view_if_needed", None)
+                        if callable(scroll_into_view):
+                            scroll_into_view(timeout=2000)
+                        return candidate
+
+                    details = candidate.evaluate(
+                        "el => ({ tag: el.tagName.toLowerCase(), type: el.type || '', id: el.id || '' })"
+                    )
+                    if details["tag"] == "input" and details["type"] in ("radio", "checkbox") and details["id"]:
+                        escaped_id = details["id"].replace("\\", "\\\\").replace('"', '\\"')
+                        labels = scope.locator(f'label[for="{escaped_id}"]')
+                        for label_index in range(min(labels.count(), max_candidates)):
+                            label = labels.nth(label_index)
+                            if label.is_visible() and label.is_enabled():
+                                scroll_into_view = getattr(label, "scroll_into_view_if_needed", None)
+                                if callable(scroll_into_view):
+                                    scroll_into_view(timeout=2000)
+                                return label
+                except Exception:
+                    continue
+
+            tolerant_candidate = _whitespace_tolerant_text_candidate(scope, selector)
+            if tolerant_candidate is not None:
+                print(f"      [Wait] 改行・空白の差を吸収して要素を特定しました: {selector}")
+                return tolerant_candidate
+
+            tolerant_candidate = _tracking_tolerant_href_candidate(scope, selector)
+            if tolerant_candidate is not None:
+                print(f"      [Wait] 変動する計測用URLパラメータを除外して要素を特定しました: {selector}")
+                return tolerant_candidate
+
+        if not scroll_started:
+            print(f"      [Wait] 要素の描画を待ちながら自動スクロールします: {selector}")
+            scroll_started = True
+
+        moved = False
+        for scope in _locator_scopes(page):
+            try:
+                moved = _advance_scroll_surfaces(scope, scroll_step_px, direction) or moved
+            except Exception:
+                continue
+
+        now = time.monotonic()
+        if not moved or now - last_direction_change >= max(1.0, timeout_ms / 2000):
+            direction *= -1
+            last_direction_change = now
+        page.wait_for_timeout(250)
+
+    raise RuntimeError(f"操作可能な要素が時間内に表示されませんでした: {selector}")
+
+
 class PageRegistry:
     """Keep stable page IDs that match the order used by the scenario recorder."""
 
@@ -113,43 +383,41 @@ class PageRegistry:
 
 def click_first_actionable(locator, timeout_ms=15000, max_candidates=20):
     """Click the first matching element that can actually receive the click."""
-    candidate_count = locator.count()
-    if candidate_count == 0:
-        locator.first.click(timeout=timeout_ms)
-        return
-
-    if candidate_count == 1:
-        locator.first.click(timeout=timeout_ms)
-        return
-
     deadline = time.monotonic() + timeout_ms / 1000
     last_error = None
-    for index in range(min(candidate_count, max_candidates)):
-        remaining_ms = int((deadline - time.monotonic()) * 1000)
-        if remaining_ms <= 0:
-            break
+    while time.monotonic() < deadline:
+        candidate_count = locator.count()
+        for index in range(min(candidate_count, max_candidates)):
+            remaining_ms = int((deadline - time.monotonic()) * 1000)
+            if remaining_ms <= 0:
+                break
 
-        candidate = locator.nth(index)
-        try:
-            candidate.click(timeout=min(3000, remaining_ms))
-            return
-        except Exception as error:
-            last_error = error
-            message = str(error).lower()
-            retryable_actionability_error = any(fragment in message for fragment in (
-                "intercepts pointer events",
-                "not visible",
-                "not enabled",
-                "not stable",
-                "outside of the viewport",
-                "detached from the dom",
-            ))
-            if not retryable_actionability_error:
-                raise
+            candidate = locator.nth(index)
+            is_visible = getattr(candidate, "is_visible", None)
+            if callable(is_visible) and not is_visible():
+                continue
+
+            try:
+                candidate.click(timeout=min(3000, remaining_ms))
+                return
+            except Exception as error:
+                last_error = error
+                message = str(error).lower()
+                retryable_actionability_error = any(fragment in message for fragment in (
+                    "intercepts pointer events",
+                    "not visible",
+                    "not enabled",
+                    "not stable",
+                    "outside of the viewport",
+                    "detached from the dom",
+                ))
+                if not retryable_actionability_error:
+                    raise
+        time.sleep(0.1)
 
     if last_error is not None:
         raise last_error
-    locator.first.click(timeout=timeout_ms)
+    raise RuntimeError("クリック可能な表示要素が見つかりませんでした。")
 
 
 def run_tracker(project_name, config_filename, headless=False):
@@ -165,7 +433,7 @@ def run_tracker(project_name, config_filename, headless=False):
     
     if not os.path.exists(config_path):
         print(f"エラー: 設定ファイル '{config_path}' が見つかりません。")
-        return
+        return False
 
     with open(config_path, "r", encoding="utf-8") as f:
         master_config = json.load(f)
@@ -174,10 +442,19 @@ def run_tracker(project_name, config_filename, headless=False):
 
     if not combined_steps:
         print("エラー: 実行すべきステップが空です。")
-        return
+        return False
 
-    # 最大3回のリトライループを設定
-    max_retries = 3
+    execution_settings = master_config.get("execution_settings", {})
+    element_timeout_ms = int(execution_settings.get("element_timeout_ms", 30000))
+    action_timeout_ms = int(execution_settings.get("action_timeout_ms", 15000))
+    navigation_timeout_ms = int(execution_settings.get("navigation_timeout_ms", 30000))
+    tab_timeout_ms = int(execution_settings.get("tab_timeout_ms", 15000))
+    dom_quiet_ms = int(execution_settings.get("dom_quiet_ms", 600))
+    dom_stable_timeout_ms = int(execution_settings.get("dom_stable_timeout_ms", 5000))
+    scroll_step_px = int(execution_settings.get("scroll_step_px", 600))
+    between_steps_ms = int(execution_settings.get("between_steps_ms", 500))
+
+    max_retries = int(execution_settings.get("max_retries", 3))
     success = False
 
     for attempt in range(max_retries):
@@ -330,7 +607,7 @@ def run_tracker(project_name, config_filename, headless=False):
                 print(f"      [Tab] 新しいタブ [{page_id}] を登録しました。")
                 return page_id
 
-            def wait_for_page_id(page_id, timeout_ms=10000):
+            def wait_for_page_id(page_id, timeout_ms=tab_timeout_ms):
                 deadline = time.monotonic() + timeout_ms / 1000
                 while time.monotonic() < deadline:
                     target_page = registry.get_live(page_id)
@@ -356,8 +633,9 @@ def run_tracker(project_name, config_filename, headless=False):
             print(f"開始URL: {master_config.get('start_url', '未設定')}")
             
             try:
-                page.goto(master_config.get('start_url', ''))
+                page.goto(master_config.get('start_url', ''), timeout=navigation_timeout_ms)
                 page.wait_for_load_state("domcontentloaded")
+                wait_for_dom_stable(page, dom_quiet_ms, dom_stable_timeout_ms)
                 wait_for_analytics_quiet(page, page_capture_states["main"])
             except Exception as e:
                 print(f"   初期ページを読み込めませんでした: {e}")
@@ -379,7 +657,7 @@ def run_tracker(project_name, config_filename, headless=False):
                     # 前ステップの遅延通信を前ステップ側で収束させる
                     settle_page = registry.get_live(runtime_state["active_page_id"])
                     if settle_page is not None:
-                        settle_page.wait_for_timeout(1000)
+                        settle_page.wait_for_timeout(between_steps_ms)
 
                     requested_page_id = step.get("page_id")
                     if action in ("switch_window", "close_window"):
@@ -410,10 +688,11 @@ def run_tracker(project_name, config_filename, headless=False):
 
                         print("      [Wait] 遷移先ページの読み込みを待っています...")
                         try:
-                            page.wait_for_load_state("load", timeout=15000)
+                            page.wait_for_load_state("load", timeout=navigation_timeout_ms)
                             print("         -> ページのロード完了を確認しました。")
                         except Exception:
                             print("         -> ロード待ちがタイムアウトしました。処理を続行します。")
+                        wait_for_dom_stable(page, dom_quiet_ms, dom_stable_timeout_ms)
                         wait_for_analytics_quiet(page, step_capture_state)
                         after_count = sum(
                             1 for event in analytics_logs
@@ -441,36 +720,60 @@ def run_tracker(project_name, config_filename, headless=False):
 
                     target_loc = None
                     if selector:
-                        target_loc = page.locator(selector)
                         try:
-                            target_loc.first.wait_for(state="attached", timeout=10000)
+                            if action == "wait_for" and step.get("state", "visible") != "visible":
+                                target_loc = page.locator(selector).first
+                                target_loc.wait_for(
+                                    state=step.get("state", "attached"),
+                                    timeout=int(step.get("timeout_ms", element_timeout_ms)),
+                                )
+                            else:
+                                target_loc = wait_for_actionable_locator(
+                                    page,
+                                    selector,
+                                    timeout_ms=int(step.get("timeout_ms", element_timeout_ms)),
+                                    scroll_step_px=scroll_step_px,
+                                )
                         except Exception as e_timeout:
                             match = re.search(r'\[name="(.*?)"\]', selector)
                             if match:
                                 fallback_text = match.group(1)
                                 print(f"      セレクタが見つかりません。テキスト『{fallback_text}』で曖昧検索に切り替えます...")
-                                target_loc = page.locator(f'text="{fallback_text}"')
-                                target_loc.first.wait_for(state="attached", timeout=5000)
+                                target_loc = wait_for_actionable_locator(
+                                    page,
+                                    f'text="{fallback_text}"',
+                                    timeout_ms=5000,
+                                    scroll_step_px=scroll_step_px,
+                                )
                             else:
                                 raise e_timeout
                         
                     if action == "click":
-                        click_first_actionable(target_loc, timeout_ms=15000)
+                        click_first_actionable(target_loc, timeout_ms=action_timeout_ms)
 
                     elif action == "change" or action == "select":
-                        target_loc = target_loc.first
                         element_tag = target_loc.evaluate("el => el.tagName.toLowerCase()")
                         if element_tag == "select":
-                            target_loc.select_option(value=value, timeout=15000)
+                            target_loc.select_option(value=value, timeout=action_timeout_ms)
                             print(f"      選択肢 [{value}] をセレクトボックスから選択しました。")
                         else:
-                            target_loc.fill(value, timeout=15000)
+                            target_loc.fill(value, timeout=action_timeout_ms)
                             target_loc.press("Enter")
                             
                     elif action == "fill":
-                        target_loc = target_loc.first
-                        target_loc.fill(value, timeout=15000)
+                        target_loc.fill(value, timeout=action_timeout_ms)
                         target_loc.press("Tab")
+
+                    elif action == "scroll":
+                        scroll_page(page, value, target_loc)
+
+                    elif action == "wait":
+                        page.wait_for_timeout(int(value or step.get("timeout_ms", 1000)))
+
+                    elif action == "wait_for":
+                        pass
+
+                    wait_for_dom_stable(page, dom_quiet_ms, dom_stable_timeout_ms)
                     
                     wait_for_analytics_quiet(page, step_capture_state)
                     after_count = sum(
@@ -520,6 +823,8 @@ def run_tracker(project_name, config_filename, headless=False):
     else:
         print(f"\nエラー: {max_retries}回試行しましたが、シナリオを最後まで実行できませんでした。")
 
+    return success
+
 if __name__ == "__main__":
     p_name = "example_project"
     t_file = "test.json"
@@ -533,4 +838,4 @@ if __name__ == "__main__":
         if sys.argv[3] == "--headless":
             is_headless = True
         
-    run_tracker(p_name, t_file, headless=is_headless)
+    sys.exit(0 if run_tracker(p_name, t_file, headless=is_headless) else 1)
