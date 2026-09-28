@@ -510,10 +510,22 @@ def generate_compare_report(
 ):
     project_dir = os.path.join("project", project_name)
     template_path = os.path.join(project_dir, "template.xlsx")
-    
-    l_path = latest_json_path if os.path.isabs(latest_json_path) else os.path.join(project_dir, "outputs", latest_json_path)
-    b_path = base_json_path if os.path.isabs(base_json_path) else os.path.join(project_dir, "outputs", base_json_path)
-    output_excel_path = os.path.join(project_dir, "outputs", output_excel_name)
+
+    def resolve_measurement_path(input_path):
+        if os.path.isabs(input_path):
+            return input_path
+        candidates = (
+            os.path.join(project_dir, "outputs", input_path),
+            os.path.join(project_dir, "scenario", input_path),
+            os.path.join(project_dir, input_path),
+        )
+        return next((path for path in candidates if os.path.exists(path)), candidates[0])
+
+    l_path = resolve_measurement_path(latest_json_path)
+    b_path = resolve_measurement_path(base_json_path)
+    output_dir = os.path.join(project_dir, "outputs")
+    os.makedirs(output_dir, exist_ok=True)
+    output_excel_path = os.path.join(output_dir, output_excel_name)
 
     config = load_project_config(project_dir)
     

@@ -7,6 +7,8 @@ import argparse
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 from playwright.sync_api import sync_playwright
 
+from storage_paths import measurement_output_path, safe_file_component
+
 def _safe_step_token(value):
     token = re.sub(r"[^\w-]+", "_", str(value or ""), flags=re.UNICODE).strip("_")
     return token or "step"
@@ -699,15 +701,14 @@ def run_tracker(
                 append_analytics_log(log_entry, source_page_id)
                 print("    [AEP Web SDK 検知] Edge Networkへの通信を検知しました")
 
-        output_dir = os.path.join(project_dir, "outputs")
-        os.makedirs(output_dir, exist_ok=True)
-        
         from datetime import datetime
-        current_time = datetime.now().strftime("%Y%m%d_%H%M")
-        
-        base_filename = master_config.get("output_file", config_filename.replace(".json", "_result.json"))
-        output_filename = f"{current_time}_{base_filename}"
-        output_path = os.path.join(output_dir, output_filename)
+        current_time = datetime.now().strftime("%Y%m%d%H%M")
+        scenario_name = safe_file_component(
+            master_config.get("scenario_name")
+            or os.path.splitext(os.path.basename(config_filename))[0]
+        )
+        output_path = measurement_output_path(project_dir, scenario_name, current_time)
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
         step_error_occurred = False 
 
@@ -929,6 +930,8 @@ def run_tracker(
                     "schema_version": 2,
                     "project": project_name,
                     "scenario": config_filename,
+                    "scenario_name": scenario_name,
+                    "captured_at": current_time,
                     "memo": master_config.get("memo", ""),
                     "scenario_start_url": scenario_start_url,
                     "execution_start_url": execution_start_url,

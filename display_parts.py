@@ -523,6 +523,16 @@ class Ui_MainWindow:
 
         # --- ボタン ---
         layout.addSpacing(16)
+
+        delete_layout = QHBoxLayout()
+        self.btn_delete_proj = QPushButton("プロジェクトを削除")
+        self.btn_delete_proj.setObjectName("dangerBtn")
+        self.btn_delete_proj.setCursor(Qt.PointingHandCursor)
+        self.btn_delete_proj.setVisible(False)
+        delete_layout.addWidget(self.btn_delete_proj)
+        delete_layout.addStretch(1)
+        layout.addLayout(delete_layout)
+
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(12)
         

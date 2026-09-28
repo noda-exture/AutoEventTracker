@@ -8,11 +8,17 @@ from datetime import datetime
 from urllib.parse import urlsplit, urlunsplit
 
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QFileDialog
-from PySide6.QtCore import Signal, QThread
+from PySide6.QtCore import QFile, Signal, QThread
 from PySide6.QtGui import QTextCursor
 
 from excel_reporter import generate_compare_report
 from display_parts import Ui_MainWindow
+from storage_paths import (
+    comparison_output_filename,
+    safe_file_component,
+    scenario_definition_files,
+    scenario_name_from_reference,
+)
 
 
 def parse_environment_lines(text):
@@ -55,6 +61,32 @@ def replace_start_url_origin(start_url, base_url):
     if target.scheme not in ("http", "https") or not target.netloc:
         raise ValueError("登録環境のURLが不正です。")
     return urlunsplit((target.scheme, target.netloc, source.path, source.query, source.fragment))
+
+
+def copy_default_template(project_dir, template_path=None):
+    source_path = template_path or os.path.join("project", "template.xlsx")
+    if not os.path.isfile(source_path):
+        raise FileNotFoundError(f"共通テンプレートが見つかりません: {source_path}")
+    target_path = os.path.join(project_dir, "template.xlsx")
+    shutil.copy2(source_path, target_path)
+    return target_path
+
+
+def resolve_project_directory(project_name, project_root="project"):
+    root_path = os.path.realpath(project_root)
+    target_path = os.path.realpath(os.path.join(root_path, project_name))
+    if os.path.dirname(target_path) != root_path:
+        raise ValueError("削除対象のプロジェクトパスが不正です。")
+    return target_path
+
+
+def normalize_trash_result(result):
+    """Support both PySide6 return shapes for QFile.moveToTrash()."""
+    if isinstance(result, tuple):
+        moved = bool(result[0]) if result else False
+        trash_path = str(result[1]) if len(result) > 1 and result[1] else ""
+        return moved, trash_path
+    return bool(result), ""
 
 # ==========================================
 # 非同期処理ワーカー
@@ -187,6 +219,7 @@ class AutoTrackerApp(QMainWindow):
         self.ui.btn_edit_proj.clicked.connect(self.open_edit_project_page)
         self.ui.btn_cancel_proj.clicked.connect(lambda: self.ui.stacked_widget.setCurrentIndex(0))
         self.ui.btn_confirm_proj.clicked.connect(self.save_project_action)
+        self.ui.btn_delete_proj.clicked.connect(self.delete_project_action)
         self.ui.btn_open_template.clicked.connect(self.open_template_excel)
 
         self.ui.combo_proj.currentTextChanged.connect(self.update_scenario_list)
@@ -198,6 +231,8 @@ class AutoTrackerApp(QMainWindow):
         # 分析タブ
         self.ui.btn_f1.clicked.connect(lambda: self.select_file(self.ui.txt_f1))
         self.ui.btn_f2.clicked.connect(lambda: self.select_file(self.ui.txt_f2))
+        self.ui.txt_f1.textChanged.connect(self.update_comparison_output_name)
+        self.ui.txt_f2.textChanged.connect(self.update_comparison_output_name)
         self.ui.btn_run_analysis.clicked.connect(self.start_analysis)
         self.ui.btn_open.clicked.connect(self.open_dir)
 
@@ -229,7 +264,7 @@ class AutoTrackerApp(QMainWindow):
         
         scenario_dir = os.path.join("project", proj_name, "scenario")
         if os.path.exists(scenario_dir):
-            files = [f for f in os.listdir(scenario_dir) if f.endswith('.json')]
+            files = scenario_definition_files(scenario_dir)
             if files:
                 self.ui.combo_scenario.addItems(files)
             else:
@@ -355,6 +390,7 @@ class AutoTrackerApp(QMainWindow):
         self.ui.input_environments.clear()
         
         self.ui.tpl_frame.setVisible(False)
+        self.ui.btn_delete_proj.setVisible(False)
         self.ui.stacked_widget.setCurrentIndex(1)
 
     def open_edit_project_page(self):
@@ -390,7 +426,47 @@ class AutoTrackerApp(QMainWindow):
         self.ui.input_environments.setPlainText(environment_lines(environments))
         
         self.ui.tpl_frame.setVisible(True)
+        self.ui.btn_delete_proj.setVisible(True)
         self.ui.stacked_widget.setCurrentIndex(1)
+
+    def delete_project_action(self):
+        project_name = self.current_editing_proj.strip()
+        if not self.is_edit_mode or not project_name:
+            QMessageBox.warning(self, "削除エラー", "削除対象のプロジェクトが選択されていません。")
+            return
+
+        try:
+            project_dir = resolve_project_directory(project_name)
+        except ValueError as error:
+            QMessageBox.critical(self, "削除エラー", str(error))
+            return
+
+        if not os.path.isdir(project_dir):
+            QMessageBox.warning(self, "削除エラー", f"プロジェクトフォルダが見つかりません:\n{project_dir}")
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "プロジェクトの削除",
+            f"プロジェクト『{project_name}』を削除しますか？\n"
+            "シナリオ、計測データ、Excelファイルもすべて対象です。",
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        moved, _ = normalize_trash_result(QFile.moveToTrash(project_dir))
+        if not moved:
+            QMessageBox.critical(self, "削除エラー", "プロジェクトを削除できませんでした。")
+            return
+
+        self.log_write(f"プロジェクトを削除しました: {project_name}\n")
+        self.current_editing_proj = ""
+        self.is_edit_mode = False
+        self.refresh_project_list()
+        self.ui.stacked_widget.setCurrentIndex(0)
+        QMessageBox.information(self, "削除完了", f"プロジェクト『{project_name}』を削除しました。")
 
     def save_project_action(self):
         proj_id = self.ui.input_proj_id.text().strip()
@@ -457,10 +533,6 @@ class AutoTrackerApp(QMainWindow):
                 QMessageBox.warning(self, "エラー", f"既に '{proj_id}' というプロジェクトが存在します。")
                 return
 
-            os.makedirs(os.path.join(proj_dir, "outputs"), exist_ok=True)
-            os.makedirs(os.path.join(proj_dir, "scenario"), exist_ok=True)
-            os.makedirs(os.path.join(proj_dir, "parts"), exist_ok=True)
-
             config_data = {
                 "client_name": client,
                 "task_name": task,
@@ -472,8 +544,17 @@ class AutoTrackerApp(QMainWindow):
                     "ignore_params": ["_ts", "gtm_auth", "gjid", "gtm", "requestId", "configId"], "nested_separator": "."
                 }
             }
-            with open(os.path.join(proj_dir, "config.json"), "w", encoding="utf-8") as f:
-                json.dump(config_data, f, indent=4, ensure_ascii=False)
+            try:
+                os.makedirs(os.path.join(proj_dir, "outputs"), exist_ok=True)
+                os.makedirs(os.path.join(proj_dir, "scenario"), exist_ok=True)
+                copy_default_template(proj_dir)
+                with open(os.path.join(proj_dir, "config.json"), "w", encoding="utf-8") as f:
+                    json.dump(config_data, f, indent=4, ensure_ascii=False)
+            except (OSError, FileNotFoundError) as error:
+                if os.path.isdir(proj_dir):
+                    shutil.rmtree(proj_dir)
+                QMessageBox.critical(self, "プロジェクト作成エラー", str(error))
+                return
 
             self.refresh_project_list()
             idx = self.ui.combo_proj.findText(proj_id)
@@ -513,9 +594,27 @@ class AutoTrackerApp(QMainWindow):
 
     def select_file(self, target_lineedit):
         proj = self.ui.combo_proj.currentText()
-        init_dir = os.path.abspath(os.path.join("project", proj, "outputs")) if os.path.exists(os.path.join("project", proj, "outputs")) else os.getcwd()
+        other_lineedit = self.ui.txt_f2 if target_lineedit is self.ui.txt_f1 else self.ui.txt_f1
+        other_path = other_lineedit.text().strip().strip("'").strip('"')
+        project_scenarios = os.path.abspath(os.path.join("project", proj, "scenario"))
+        if other_path and os.path.isfile(other_path):
+            init_dir = os.path.dirname(os.path.abspath(other_path))
+        elif os.path.isdir(project_scenarios):
+            init_dir = project_scenarios
+        else:
+            init_dir = os.getcwd()
         path, _ = QFileDialog.getOpenFileName(self, "JSONファイルを選択", init_dir, "JSON Files (*.json)")
         if path: target_lineedit.setText(path)
+
+    def update_comparison_output_name(self, *_):
+        latest_path = self.ui.txt_f1.text().strip().strip("'").strip('"')
+        base_path = self.ui.txt_f2.text().strip().strip("'").strip('"')
+        if not latest_path or not base_path:
+            self.ui.txt_out.setText("result.xlsx")
+            return
+        generated_name = comparison_output_filename(latest_path, base_path)
+        if generated_name:
+            self.ui.txt_out.setText(generated_name)
 
     def open_dir(self):
         proj = self.ui.combo_proj.currentText()
@@ -609,7 +708,7 @@ class AutoTrackerApp(QMainWindow):
         self.ui.btn_exec_scenario.setEnabled(True)
         self.log_write("==================================================\n")
         if success:
-            self.log_write("シナリオの実行が完了しました。計測結果はoutputsフォルダに保存されています。\n")
+            self.log_write("シナリオの実行が完了しました。計測データはscenario配下のシナリオ別フォルダに保存されています。\n")
         else:
             self.log_write("シナリオの実行に失敗しました。計測結果は保存されていません。\n")
             QMessageBox.warning(
@@ -637,12 +736,14 @@ class AutoTrackerApp(QMainWindow):
             
         if not filename.endswith(".json"):
             filename += ".json"
+
+        scenario_name = safe_file_component(scenario_name_from_reference(filename))
             
         self.ui.btn_record_auto.setEnabled(False)
         self.ui.txt_log.clear()
         self.log_write(f"[{datetime.now().strftime('%H:%M:%S')}] 操作レコーダーを起動します。\n")
         self.log_write(f"開始URL: {url}\n")
-        self.log_write(f"保存先: project/{proj}/scenario/{filename}\n")
+        self.log_write(f"保存先: project/{proj}/scenario/{scenario_name}/{scenario_name}.json\n")
         if memo: self.log_write(f"メモ: {memo}\n")
         self.log_write("==================================================\n")
         self.log_write("起動したブラウザで操作を行い、終わったらブラウザを閉じてください。\n")

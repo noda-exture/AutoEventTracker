@@ -84,12 +84,17 @@ const flushClosedPages = () => {
     
     console.log(`\n終了操作を検知しました。シナリオを保存します...`);
     
-    const scenarioDir = path.join(__dirname, 'project', proj, 'scenario');
+    const requestedFileName = path.basename(fileName.endsWith('.json') ? fileName : `${fileName}.json`);
+    const scenarioName = requestedFileName
+      .replace(/\.json$/i, '')
+      .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+      .replace(/^\.+|\.+$/g, '') || 'scenario';
+    const safeFileName = `${scenarioName}.json`;
+    const scenarioDir = path.join(__dirname, 'project', proj, 'scenario', scenarioName);
     if (!fs.existsSync(scenarioDir)) {
       fs.mkdirSync(scenarioDir, { recursive: true });
     }
-    
-    const safeFileName = fileName.endsWith('.json') ? fileName : `${fileName}.json`;
+
     const savePath = path.join(scenarioDir, safeFileName);
     
     const finalMemo = inputMemo ? inputMemo : "自動レコーダーによってキャプチャされたシナリオ";
@@ -97,7 +102,7 @@ const flushClosedPages = () => {
     const outputData = {
       schema_version: 2,
       tab_capture_mode: 'stable_page_id',
-      scenario_name: safeFileName.replace('.json', ''),
+      scenario_name: scenarioName,
       start_url: startUrl,
       memo: finalMemo,
       steps: steps
