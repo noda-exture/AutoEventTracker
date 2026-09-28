@@ -238,6 +238,10 @@ class AutoTrackerApp(QMainWindow):
             self.ui.combo_scenario.addItem("※ scenarioフォルダがありません")
 
     def load_scenario_info(self, scenario_file):
+        if not self.ui.chk_override_start_url.isChecked():
+            self.ui.txt_start_url_override.clear()
+            self.ui.txt_start_url_override.setEnabled(False)
+
         if not scenario_file or scenario_file.startswith("※"):
             self.ui.lbl_info_name.setText("-")
             self.ui.lbl_info_url.setText("-")
@@ -317,7 +321,13 @@ class AutoTrackerApp(QMainWindow):
         self.ui.lbl_info_effective_url.setText(effective_url or "-")
 
     def on_start_url_override_toggled(self, checked):
-        if checked and not self.ui.txt_start_url_override.text().strip():
+        if not checked:
+            self.ui.txt_start_url_override.clear()
+            self.ui.txt_start_url_override.setEnabled(False)
+            self.update_effective_url_preview()
+            return
+
+        if not self.ui.txt_start_url_override.text().strip():
             base_url = self.ui.combo_environment.currentData()
             try:
                 initial_url = (
@@ -327,7 +337,7 @@ class AutoTrackerApp(QMainWindow):
             except ValueError:
                 initial_url = self.current_scenario_start_url
             self.ui.txt_start_url_override.setText(initial_url)
-        self.ui.txt_start_url_override.setEnabled(checked)
+        self.ui.txt_start_url_override.setEnabled(True)
         self.update_effective_url_preview()
 
     # ------------------------------------------

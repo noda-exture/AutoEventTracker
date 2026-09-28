@@ -1,8 +1,10 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
                                QPushButton, QComboBox, QTextEdit, QProgressBar,
                                QTabWidget, QStackedWidget, QFormLayout, QGridLayout,
-                               QFrame, QCheckBox, QSizePolicy)
+                               QFrame, QCheckBox, QSizePolicy, QStyle, QStyleOptionButton)
 from PySide6.QtCore import Qt
+from PySide6.QtCore import QPointF
+from PySide6.QtGui import QColor, QPainter, QPen
 
 # ==========================================
 # カスタムUI部品
@@ -34,6 +36,49 @@ class DragDropLineEdit(QLineEdit):
             self.setText(urls[0].toLocalFile())
 
 
+class ArrowComboBox(QComboBox):
+    """Combo box with a theme-independent visible chevron."""
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        pen = QPen(QColor("#475467"), 2)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        painter.setPen(pen)
+
+        center_x = self.width() - 16
+        center_y = self.height() / 2
+        painter.drawLine(QPointF(center_x - 4, center_y - 2), QPointF(center_x, center_y + 2))
+        painter.drawLine(QPointF(center_x, center_y + 2), QPointF(center_x + 4, center_y - 2))
+
+
+class CheckMarkBox(QCheckBox):
+    """Checkbox that keeps a visible check mark with the custom theme."""
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if not self.isChecked():
+            return
+
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        indicator = self.style().subElementRect(QStyle.SE_CheckBoxIndicator, option, self)
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        pen = QPen(QColor("#FFFFFF"), 2)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        painter.setPen(pen)
+
+        left = indicator.left()
+        top = indicator.top()
+        painter.drawLine(QPointF(left + 4, top + 9), QPointF(left + 7, top + 12))
+        painter.drawLine(QPointF(left + 7, top + 12), QPointF(left + 13, top + 5))
+
+
 # ==========================================
 # UIレイアウト構築クラス
 # ==========================================
@@ -41,8 +86,8 @@ class DragDropLineEdit(QLineEdit):
 class Ui_MainWindow:
     def setupUi(self, main_window):
         main_window.setWindowTitle("AutoEventTracker")
-        main_window.setMinimumSize(920, 760)
-        main_window.resize(1040, 880)
+        main_window.setMinimumSize(1100, 800)
+        main_window.resize(1280, 900)
 
         self.stacked_widget = QStackedWidget()
         main_window.setCentralWidget(self.stacked_widget)
@@ -87,7 +132,8 @@ class Ui_MainWindow:
         lbl_proj.setProperty("class", "bold-label")
         proj_layout.addWidget(lbl_proj)
 
-        self.combo_proj = QComboBox()
+        self.combo_proj = ArrowComboBox()
+        self.combo_proj.setObjectName("projectCombo")
         proj_layout.addWidget(self.combo_proj)
 
         self.btn_edit_proj = QPushButton("プロジェクト設定編集")
@@ -101,25 +147,40 @@ class Ui_MainWindow:
         proj_layout.addWidget(self.btn_create_proj)
         layout.addWidget(project_bar)
 
-        # タブエリア
+        # 操作画面と処理ログを左右に配置
+        workspace_layout = QHBoxLayout()
+        workspace_layout.setSpacing(18)
+
+        operation_panel = QWidget()
+        operation_layout = QVBoxLayout(operation_panel)
+        operation_layout.setContentsMargins(0, 0, 0, 0)
+
         self.tabs = QTabWidget()
         self.tabs.setObjectName("workspaceTabs")
         self.tabs.setDocumentMode(True)
-        self.tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        self.tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.tabs.addTab(self._create_analysis_tab(), "計測データ比較")
         self.tabs.addTab(self._create_execution_tab(), "シナリオ実行")
         self.tabs.addTab(self._create_scenario_tab(), "シナリオ作成")
-        layout.addWidget(self.tabs)
+        operation_layout.addWidget(self.tabs)
+        workspace_layout.addWidget(operation_panel, stretch=1)
 
-        # 処理ログ
+        log_panel = QWidget()
+        log_layout = QVBoxLayout(log_panel)
+        log_layout.setContentsMargins(0, 0, 0, 0)
+        log_layout.setSpacing(10)
+
         lbl_log = QLabel("処理ログ")
         lbl_log.setObjectName("logTitle")
-        layout.addWidget(lbl_log)
+        log_layout.addWidget(lbl_log)
 
         self.txt_log = QTextEdit()
         self.txt_log.setObjectName("logConsole")
         self.txt_log.setReadOnly(True)
-        layout.addWidget(self.txt_log, stretch=1)
+        log_layout.addWidget(self.txt_log, stretch=1)
+        workspace_layout.addWidget(log_panel, stretch=1)
+
+        layout.addLayout(workspace_layout, stretch=1)
 
         self.stacked_widget.addWidget(main_widget)
 
@@ -201,10 +262,11 @@ class Ui_MainWindow:
 
         exec_header = QHBoxLayout()
         exec_header.setSpacing(16)
-        self.combo_scenario = QComboBox()
+        self.combo_scenario = ArrowComboBox()
+        self.combo_scenario.setObjectName("scenarioCombo")
         exec_header.addWidget(self.combo_scenario, stretch=2)
 
-        self.chk_headless = QCheckBox("ブラウザを表示せずに実行")
+        self.chk_headless = CheckMarkBox("ブラウザを表示せずに実行")
         exec_header.addWidget(self.chk_headless, stretch=1)
         layout.addLayout(exec_header)
 
@@ -219,16 +281,16 @@ class Ui_MainWindow:
         environment_row.addWidget(self.combo_environment, stretch=1)
         layout.addLayout(environment_row)
 
-        override_row = QHBoxLayout()
-        override_row.setSpacing(12)
-        self.chk_override_start_url = QCheckBox("今回だけ開始URLを変更")
-        self.chk_override_start_url.setFixedWidth(190)
+        override_layout = QVBoxLayout()
+        override_layout.setSpacing(8)
+        self.chk_override_start_url = CheckMarkBox("今回だけ開始URLを変更")
         self.txt_start_url_override = QLineEdit()
+        self.txt_start_url_override.setObjectName("startUrlOverrideInput")
         self.txt_start_url_override.setPlaceholderText("例: https://test01.example.com/path/")
         self.txt_start_url_override.setEnabled(False)
-        override_row.addWidget(self.chk_override_start_url)
-        override_row.addWidget(self.txt_start_url_override, stretch=1)
-        layout.addLayout(override_row)
+        override_layout.addWidget(self.chk_override_start_url)
+        override_layout.addWidget(self.txt_start_url_override)
+        layout.addLayout(override_layout)
 
         # 情報カード：右端ギリギリまで広がり、文字の下部が切れないレイアウト
         self.info_frame = QFrame()
