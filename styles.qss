@@ -3,7 +3,6 @@
 QWidget {
     background: transparent;
     color: #172033;
-    font-family: "Inter", "SF Pro Text", "Segoe UI", "Hiragino Sans", "Yu Gothic UI", sans-serif;
     font-size: 15px;
 }
 
@@ -64,7 +63,6 @@ QLabel[class="bold-label"] {
 
 #infoUrlLabel {
     color: #5F913B;
-    font-family: "SF Mono", "JetBrains Mono", "Menlo", monospace;
     font-size: 14px;
     font-weight: 600;
 }
@@ -309,7 +307,6 @@ QProgressBar::chunk {
     border: 1px solid #202A3A;
     border-radius: 12px;
     padding: 14px;
-    font-family: "SF Mono", "JetBrains Mono", "Menlo", "Courier New", monospace;
     font-size: 13px;
     selection-background-color: #344054;
     selection-color: #FFFFFF;

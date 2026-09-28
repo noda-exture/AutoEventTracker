@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineE
                                QFrame, QCheckBox, QSizePolicy, QStyle, QStyleOptionButton)
 from PySide6.QtCore import Qt
 from PySide6.QtCore import QPointF
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QColor, QFontDatabase, QPainter, QPen
 
 # ==========================================
 # カスタムUI部品
@@ -177,6 +177,7 @@ class Ui_MainWindow:
 
         self.txt_log = QTextEdit()
         self.txt_log.setObjectName("logConsole")
+        self.txt_log.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
         self.txt_log.setReadOnly(True)
         log_layout.addWidget(self.txt_log, stretch=1)
         workspace_layout.addWidget(log_panel, stretch=1)
@@ -339,6 +340,7 @@ class Ui_MainWindow:
         
         self.lbl_info_url = QLabel("-")
         self.lbl_info_url.setObjectName("infoUrlLabel")
+        self.lbl_info_url.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
         self.lbl_info_url.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.lbl_info_url.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         
@@ -349,6 +351,7 @@ class Ui_MainWindow:
 
         self.lbl_info_effective_url = QLabel("-")
         self.lbl_info_effective_url.setObjectName("infoUrlLabel")
+        self.lbl_info_effective_url.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
         self.lbl_info_effective_url.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.lbl_info_effective_url.setWordWrap(True)
         self.lbl_info_effective_url.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
