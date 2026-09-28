@@ -1,4 +1,7 @@
 import unittest
+import json
+import os
+import tempfile
 
 from openpyxl import Workbook
 
@@ -13,9 +16,11 @@ from measurement_adapters.base import MeasurementAdapter
 from measurement_adapters.ga4 import GA4Adapter
 from tracker import (
     PageRegistry,
+    adapt_steps_to_execution_origin,
     click_first_actionable,
     fill_value,
     prepare_steps,
+    resolve_execution_url,
     scroll_page,
     select_value,
     wait_for_actionable_locator,
@@ -69,6 +74,48 @@ def aep_packet(event_type, sequence):
 
 
 class PacketMatchingTests(unittest.TestCase):
+    def test_registered_environment_replaces_only_the_start_url_origin(self):
+        with tempfile.TemporaryDirectory() as project_dir:
+            with open(os.path.join(project_dir, "config.json"), "w", encoding="utf-8") as config_file:
+                json.dump(
+                    {"environments": {"ステージング": "https://stg.example.com"}},
+                    config_file,
+                    ensure_ascii=False,
+                )
+
+            result = resolve_execution_url(
+                project_dir,
+                "https://www.example.com/products/?plan=1#form",
+                environment="ステージング",
+            )
+
+        self.assertEqual(result, "https://stg.example.com/products/?plan=1#form")
+
+    def test_one_time_start_url_override_takes_priority(self):
+        result = resolve_execution_url(
+            "/missing/project",
+            "https://www.example.com/",
+            environment="ステージング",
+            start_url_override="https://test01.example.com/special/",
+        )
+
+        self.assertEqual(result, "https://test01.example.com/special/")
+
+    def test_absolute_selectors_follow_the_selected_environment_origin(self):
+        steps = [
+            {"selector": 'a[href="https://www.example.com/service/"]'},
+            {"selector": 'a[href="https://external.example.net/"]'},
+        ]
+
+        adapted = adapt_steps_to_execution_origin(
+            steps,
+            "https://www.example.com/",
+            "https://stg.example.com/",
+        )
+
+        self.assertEqual(adapted[0]["selector"], 'a[href="https://stg.example.com/service/"]')
+        self.assertEqual(adapted[1]["selector"], 'a[href="https://external.example.net/"]')
+
     def test_builtin_measurement_adapters_are_registered_independently(self):
         adapters = {adapter.key: adapter for adapter in get_registered_adapters()}
 

@@ -5,6 +5,7 @@ import shutil
 import threading
 import subprocess
 from datetime import datetime
+from urllib.parse import urlsplit, urlunsplit
 
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QFileDialog
 from PySide6.QtCore import Signal, QThread
@@ -12,6 +13,48 @@ from PySide6.QtGui import QTextCursor
 
 from excel_reporter import generate_compare_report
 from display_parts import Ui_MainWindow
+
+
+def parse_environment_lines(text):
+    """Parse one `name = base URL` environment per line."""
+    environments = {}
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        if "=" not in line:
+            raise ValueError(f"{line_number}行目は「環境名 = URL」の形式で入力してください。")
+        name, base_url = (part.strip() for part in line.split("=", 1))
+        parsed = urlsplit(base_url)
+        if not name:
+            raise ValueError(f"{line_number}行目の環境名が空です。")
+        if name in environments:
+            raise ValueError(f"環境名『{name}』が重複しています。")
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError(f"{line_number}行目のURLが不正です: {base_url}")
+        environments[name] = urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
+    return environments
+
+
+def environment_lines(environments):
+    if not isinstance(environments, dict):
+        return ""
+    lines = []
+    for name, value in environments.items():
+        base_url = value.get("base_url", "") if isinstance(value, dict) else value
+        if name and base_url:
+            lines.append(f"{name} = {base_url}")
+    return "\n".join(lines)
+
+
+def replace_start_url_origin(start_url, base_url):
+    source = urlsplit(start_url)
+    target = urlsplit(base_url)
+    if source.scheme not in ("http", "https") or not source.netloc:
+        raise ValueError("シナリオの開始URLが設定されていません。")
+    if target.scheme not in ("http", "https") or not target.netloc:
+        raise ValueError("登録環境のURLが不正です。")
+    return urlunsplit((target.scheme, target.netloc, source.path, source.query, source.fragment))
 
 # ==========================================
 # 非同期処理ワーカー
@@ -40,17 +83,23 @@ class ScenarioWorker(QThread):
     log = Signal(str)
     finished = Signal(bool)
 
-    def __init__(self, proj, scenario_file, headless):
+    def __init__(self, proj, scenario_file, headless, environment=None, start_url_override=None):
         super().__init__()
         self.proj = proj
         self.scenario_file = scenario_file
         self.headless = headless
+        self.environment = environment
+        self.start_url_override = start_url_override
 
     def run(self):
         try:
             cmd = [sys.executable, "tracker.py", self.proj, self.scenario_file]
             if self.headless:
                 cmd.append("--headless")
+            if self.environment:
+                cmd.extend(["--environment", self.environment])
+            if self.start_url_override:
+                cmd.extend(["--start-url", self.start_url_override])
 
             process = subprocess.Popen(
                 cmd,
@@ -115,6 +164,7 @@ class AutoTrackerApp(QMainWindow):
         super().__init__()
         self.current_editing_proj = ""
         self.is_edit_mode = False # 新規作成か編集かを示すフラグ
+        self.current_scenario_start_url = ""
 
         # UIの読み込みとセットアップ
         self.ui = Ui_MainWindow()
@@ -141,6 +191,9 @@ class AutoTrackerApp(QMainWindow):
 
         self.ui.combo_proj.currentTextChanged.connect(self.update_scenario_list)
         self.ui.combo_scenario.currentTextChanged.connect(self.load_scenario_info)
+        self.ui.combo_environment.currentIndexChanged.connect(self.update_effective_url_preview)
+        self.ui.chk_override_start_url.toggled.connect(self.on_start_url_override_toggled)
+        self.ui.txt_start_url_override.textChanged.connect(self.update_effective_url_preview)
 
         # 分析タブ
         self.ui.btn_f1.clicked.connect(lambda: self.select_file(self.ui.txt_f1))
@@ -168,6 +221,9 @@ class AutoTrackerApp(QMainWindow):
             self.ui.btn_edit_proj.setEnabled(False)
 
     def update_scenario_list(self, proj_name):
+        self.load_project_environments(proj_name)
+        self.ui.chk_override_start_url.setChecked(False)
+        self.ui.txt_start_url_override.clear()
         self.ui.combo_scenario.clear()
         if not proj_name: return
         
@@ -186,6 +242,8 @@ class AutoTrackerApp(QMainWindow):
             self.ui.lbl_info_name.setText("-")
             self.ui.lbl_info_url.setText("-")
             self.ui.lbl_info_memo.setText("-")
+            self.ui.lbl_info_effective_url.setText("-")
+            self.current_scenario_start_url = ""
             return
             
         proj = self.ui.combo_proj.currentText()
@@ -199,12 +257,78 @@ class AutoTrackerApp(QMainWindow):
                 self.ui.lbl_info_name.setText(data.get("scenario_name", scenario_file.replace(".json", "")))
                 self.ui.lbl_info_url.setText(data.get("start_url", "未設定"))
                 self.ui.lbl_info_memo.setText(data.get("memo", "（メモ項目なし）"))
+                self.current_scenario_start_url = data.get("start_url", "")
             else:
                 raise FileNotFoundError()
         except Exception:
             self.ui.lbl_info_name.setText(scenario_file)
             self.ui.lbl_info_url.setText("読み込み失敗")
             self.ui.lbl_info_memo.setText("JSONの解析に失敗したか、ファイルが見つかりません。")
+            self.current_scenario_start_url = ""
+        self.update_effective_url_preview()
+
+    def load_project_environments(self, proj_name):
+        current_name = self.ui.combo_environment.currentText()
+        self.ui.combo_environment.blockSignals(True)
+        self.ui.combo_environment.clear()
+        self.ui.combo_environment.addItem("シナリオ設定を使用", "")
+
+        config_path = os.path.join("project", proj_name, "config.json")
+        if proj_name and os.path.exists(config_path):
+            try:
+                with open(config_path, "r", encoding="utf-8") as config_file:
+                    config = json.load(config_file)
+                environments = config.get("environments", {})
+                if isinstance(environments, dict):
+                    for name, value in environments.items():
+                        base_url = value.get("base_url", "") if isinstance(value, dict) else value
+                        if name and base_url:
+                            self.ui.combo_environment.addItem(name, base_url)
+            except (OSError, json.JSONDecodeError, AttributeError):
+                pass
+
+        index = self.ui.combo_environment.findText(current_name)
+        self.ui.combo_environment.setCurrentIndex(index if index >= 0 else 0)
+        self.ui.combo_environment.blockSignals(False)
+        self.update_effective_url_preview()
+
+    def selected_execution_url(self):
+        if self.ui.chk_override_start_url.isChecked():
+            effective_url = self.ui.txt_start_url_override.text().strip()
+            if not effective_url:
+                raise ValueError("今回使用する開始URLを入力してください。")
+        else:
+            base_url = self.ui.combo_environment.currentData()
+            effective_url = (
+                replace_start_url_origin(self.current_scenario_start_url, base_url)
+                if base_url else self.current_scenario_start_url
+            )
+
+        parsed = urlsplit(effective_url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError("今回使用する開始URLが不正です。")
+        return effective_url
+
+    def update_effective_url_preview(self, *_):
+        try:
+            effective_url = self.selected_execution_url()
+        except ValueError as error:
+            effective_url = f"未設定: {error}"
+        self.ui.lbl_info_effective_url.setText(effective_url or "-")
+
+    def on_start_url_override_toggled(self, checked):
+        if checked and not self.ui.txt_start_url_override.text().strip():
+            base_url = self.ui.combo_environment.currentData()
+            try:
+                initial_url = (
+                    replace_start_url_origin(self.current_scenario_start_url, base_url)
+                    if base_url else self.current_scenario_start_url
+                )
+            except ValueError:
+                initial_url = self.current_scenario_start_url
+            self.ui.txt_start_url_override.setText(initial_url)
+        self.ui.txt_start_url_override.setEnabled(checked)
+        self.update_effective_url_preview()
 
     # ------------------------------------------
     # 新規/編集モード切替と保存ロジック
@@ -218,6 +342,7 @@ class AutoTrackerApp(QMainWindow):
         self.ui.input_proj_id.clear()
         self.ui.input_client.clear()
         self.ui.input_task.clear()
+        self.ui.input_environments.clear()
         
         self.ui.tpl_frame.setVisible(False)
         self.ui.stacked_widget.setCurrentIndex(1)
@@ -238,18 +363,21 @@ class AutoTrackerApp(QMainWindow):
         config_path = os.path.join("project", current_proj, "config.json")
         client_name = ""
         task_name = ""
+        environments = {}
         if os.path.exists(config_path):
             try:
                 with open(config_path, "r", encoding="utf-8") as f:
                     cfg = json.load(f)
                     client_name = cfg.get("client_name", "")
                     task_name = cfg.get("task_name", "")
+                    environments = cfg.get("environments", {})
             except Exception as e:
                 self.log_write(f"config.json 読み込み警告: {str(e)}\n")
 
         self.ui.input_proj_id.setText(current_proj)
         self.ui.input_client.setText(client_name)
         self.ui.input_task.setText(task_name)
+        self.ui.input_environments.setPlainText(environment_lines(environments))
         
         self.ui.tpl_frame.setVisible(True)
         self.ui.stacked_widget.setCurrentIndex(1)
@@ -261,6 +389,12 @@ class AutoTrackerApp(QMainWindow):
 
         if not proj_id:
             QMessageBox.warning(self, "入力エラー", "プロジェクトIDを入力してください。")
+            return
+
+        try:
+            environments = parse_environment_lines(self.ui.input_environments.toPlainText())
+        except ValueError as error:
+            QMessageBox.warning(self, "実行環境の入力エラー", str(error))
             return
 
         if self.is_edit_mode:
@@ -292,6 +426,7 @@ class AutoTrackerApp(QMainWindow):
             
             config_data["client_name"] = client
             config_data["task_name"] = task
+            config_data["environments"] = environments
 
             try:
                 with open(config_path, "w", encoding="utf-8") as f:
@@ -319,6 +454,7 @@ class AutoTrackerApp(QMainWindow):
             config_data = {
                 "client_name": client,
                 "task_name": task,
+                "environments": environments,
                 "excel_setting": {
                     "font_name": "游ゴシック", "theme_color_new": "E2EFDA", "theme_color_old": "FFF2CC", "diff_color": "FFC7CE", "diff_font_color": "9C0006"
                 },
@@ -421,6 +557,18 @@ class AutoTrackerApp(QMainWindow):
         if not scenario_file or scenario_file.startswith("※"):
             QMessageBox.warning(self, "エラー", "実行可能なシナリオが選択されていません。")
             return
+
+        try:
+            execution_url = self.selected_execution_url()
+        except ValueError as error:
+            QMessageBox.warning(self, "開始URLの入力エラー", str(error))
+            return
+
+        environment = self.ui.combo_environment.currentText() if self.ui.combo_environment.currentData() else None
+        start_url_override = (
+            self.ui.txt_start_url_override.text().strip()
+            if self.ui.chk_override_start_url.isChecked() else None
+        )
             
         self.ui.btn_exec_scenario.setEnabled(False)
         self.ui.txt_log.clear()
@@ -429,9 +577,20 @@ class AutoTrackerApp(QMainWindow):
         mode_str = "【ヘッドレスモード】" if headless_mode else "【通常モード (画面表示)】"
         
         self.log_write(f"[{datetime.now().strftime('%H:%M:%S')}] シナリオ実行を開始します: {scenario_file} {mode_str}\n")
+        if environment:
+            self.log_write(f"実行環境: {environment}\n")
+        if start_url_override:
+            self.log_write("開始URLは今回の実行だけ変更します。\n")
+        self.log_write(f"実行URL: {execution_url}\n")
         self.log_write("==================================================\n")
         
-        self.scenario_worker = ScenarioWorker(proj, scenario_file, headless_mode)
+        self.scenario_worker = ScenarioWorker(
+            proj,
+            scenario_file,
+            headless_mode,
+            environment=environment,
+            start_url_override=start_url_override,
+        )
         self.scenario_worker.log.connect(self.log_write)
         self.scenario_worker.finished.connect(self.on_scenario_finished)
         self.scenario_worker.start()

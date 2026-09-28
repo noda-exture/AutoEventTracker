@@ -3,6 +3,7 @@ import sys
 import json
 import time
 import re
+import argparse
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 from playwright.sync_api import sync_playwright
 
@@ -60,6 +61,88 @@ def prepare_steps(master_config, project_dir):
         prepared_steps.append(step)
 
     return prepared_steps
+
+
+def get_project_environments(project_dir):
+    """Load registered execution environments from the project config."""
+    config_path = os.path.join(project_dir, "config.json")
+    if not os.path.exists(config_path):
+        return {}
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as config_file:
+            config = json.load(config_file)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    environments = config.get("environments", {})
+    if not isinstance(environments, dict):
+        return {}
+
+    normalized = {}
+    for name, value in environments.items():
+        base_url = value.get("base_url", "") if isinstance(value, dict) else value
+        if isinstance(name, str) and isinstance(base_url, str) and name.strip() and base_url.strip():
+            normalized[name.strip()] = base_url.strip()
+    return normalized
+
+
+def replace_url_origin(url, base_url):
+    """Replace only the origin while preserving the scenario path, query, and fragment."""
+    source = urlsplit(url)
+    target = urlsplit(base_url)
+    if target.scheme not in ("http", "https") or not target.netloc:
+        raise ValueError(f"実行環境のURLが不正です: {base_url}")
+    if source.scheme not in ("http", "https") or not source.netloc:
+        raise ValueError(f"シナリオの開始URLが不正です: {url}")
+    return urlunsplit((target.scheme, target.netloc, source.path, source.query, source.fragment))
+
+
+def resolve_execution_url(project_dir, scenario_url, environment=None, start_url_override=None):
+    """Resolve the effective URL. A one-time override takes precedence over a registered environment."""
+    if start_url_override:
+        override = start_url_override.strip()
+        parsed = urlsplit(override)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError(f"一時指定の開始URLが不正です: {start_url_override}")
+        return override
+
+    if environment:
+        environments = get_project_environments(project_dir)
+        if environment not in environments:
+            available = "、".join(environments) or "登録なし"
+            raise ValueError(f"実行環境『{environment}』が見つかりません（登録環境: {available}）")
+        return replace_url_origin(scenario_url, environments[environment])
+
+    parsed = urlsplit(scenario_url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError(f"シナリオの開始URLが不正です: {scenario_url}")
+    return scenario_url
+
+
+def adapt_steps_to_execution_origin(steps, scenario_url, execution_url):
+    """Rewrite absolute selectors that point to the scenario origin for the selected environment."""
+    source = urlsplit(scenario_url)
+    target = urlsplit(execution_url)
+    if source.scheme not in ("http", "https") or not source.netloc:
+        return steps
+    source_origin = f"{source.scheme}://{source.netloc}"
+    target_origin = f"{target.scheme}://{target.netloc}"
+    if source_origin == target_origin:
+        return steps
+
+    adapted_steps = []
+    for raw_step in steps:
+        step = dict(raw_step)
+        selector = step.get("selector")
+        if isinstance(selector, str):
+            step["selector"] = re.sub(
+                rf"{re.escape(source_origin)}(?=[/\"'])",
+                target_origin,
+                selector,
+            )
+        adapted_steps.append(step)
+    return adapted_steps
 
 
 def wait_for_analytics_quiet(page, capture_state, quiet_ms=800, max_wait_ms=3000):
@@ -449,7 +532,13 @@ def click_first_actionable(locator, timeout_ms=15000, max_candidates=20):
     raise RuntimeError("クリック可能な表示要素が見つかりませんでした。")
 
 
-def run_tracker(project_name, config_filename, headless=False):
+def run_tracker(
+    project_name,
+    config_filename,
+    headless=False,
+    environment=None,
+    start_url_override=None,
+):
     """
     Args:
         project_name (str): 案件名（例: 'sonysonpo', 'ex-ture'）
@@ -467,7 +556,23 @@ def run_tracker(project_name, config_filename, headless=False):
     with open(config_path, "r", encoding="utf-8") as f:
         master_config = json.load(f)
     
-    combined_steps = prepare_steps(master_config, project_dir)
+    scenario_start_url = master_config.get("start_url", "")
+    try:
+        execution_start_url = resolve_execution_url(
+            project_dir,
+            scenario_start_url,
+            environment=environment,
+            start_url_override=start_url_override,
+        )
+    except ValueError as error:
+        print(f"エラー: {error}")
+        return False
+
+    combined_steps = adapt_steps_to_execution_origin(
+        prepare_steps(master_config, project_dir),
+        scenario_start_url,
+        execution_start_url,
+    )
 
     if not combined_steps:
         print("エラー: 実行すべきステップが空です。")
@@ -659,10 +764,14 @@ def run_tracker(project_name, config_filename, headless=False):
             context.on("page", register_new_page)
             
             print(f"シナリオ開始: {config_filename}（プロジェクト: {project_name}）")
-            print(f"開始URL: {master_config.get('start_url', '未設定')}")
+            if environment:
+                print(f"実行環境: {environment}")
+            if start_url_override:
+                print("開始URL: 今回のみ上書き")
+            print(f"開始URL: {execution_start_url}")
             
             try:
-                page.goto(master_config.get('start_url', ''), timeout=navigation_timeout_ms)
+                page.goto(execution_start_url, timeout=navigation_timeout_ms)
                 page.wait_for_load_state("domcontentloaded")
                 wait_for_dom_stable(page, dom_quiet_ms, dom_stable_timeout_ms)
                 wait_for_analytics_quiet(page, page_capture_states["main"])
@@ -821,6 +930,10 @@ def run_tracker(project_name, config_filename, headless=False):
                     "project": project_name,
                     "scenario": config_filename,
                     "memo": master_config.get("memo", ""),
+                    "scenario_start_url": scenario_start_url,
+                    "execution_start_url": execution_start_url,
+                    "execution_environment": environment,
+                    "start_url_overridden": bool(start_url_override),
                     "step_capture_mode": "stable_step_id",
                     "tab_capture_mode": "stable_page_id",
                     "scenario_step_ids": [step["step_id"] for step in combined_steps],
@@ -854,16 +967,19 @@ def run_tracker(project_name, config_filename, headless=False):
     return success
 
 if __name__ == "__main__":
-    p_name = "example_project"
-    t_file = "test.json"
-    is_headless = False
-    
-    if len(sys.argv) > 2:
-        p_name = sys.argv[1]
-        t_file = sys.argv[2]
-    
-    if len(sys.argv) > 3:
-        if sys.argv[3] == "--headless":
-            is_headless = True
-        
-    sys.exit(0 if run_tracker(p_name, t_file, headless=is_headless) else 1)
+    parser = argparse.ArgumentParser(description="シナリオを実行して計測通信を記録します。")
+    parser.add_argument("project", help="プロジェクト名")
+    parser.add_argument("scenario", help="シナリオJSONファイル名")
+    parser.add_argument("--headless", action="store_true", help="ブラウザを表示せずに実行")
+    parser.add_argument("--environment", help="config.jsonに登録した実行環境名")
+    parser.add_argument("--start-url", help="今回の実行だけで使用する開始URL")
+    args = parser.parse_args()
+
+    succeeded = run_tracker(
+        args.project,
+        args.scenario,
+        headless=args.headless,
+        environment=args.environment,
+        start_url_override=args.start_url,
+    )
+    sys.exit(0 if succeeded else 1)

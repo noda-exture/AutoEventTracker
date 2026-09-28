@@ -72,6 +72,7 @@ AutoEventTracker/              # ツール全体のルートディレクトリ
 * **別タブ操作：** タブを `main`, `page1`, `page2` の固定IDで管理し、各操作に `page_id` を保存。新しいタブへの移動、元タブへの復帰、タブを閉じた後の操作を再現。
 * **タブ別計測：** GA4・Adobe Analyticsの通信に発生元の `page_id` を付け、各タブの直近ステップへ紐付ける。別タブを開いた直後の通信は、そのタブを開いたクリックの結果として記録。
 * **ステップID：** 自動採番は `0001`, `0002` の形式で保存。既存シナリオの `step_0001` 形式は実行時に `0001` へ変換。
+* **複数環境での実行：** プロジェクト設定へ本番・ステージングなどのベースURLを登録し、実行時に選択可能。必要な場合はシナリオJSONを変更せず、今回だけ開始URLを上書きできる。サブドメイン変更時は、元の開始URLと同じオリジンを含む絶対URLセレクタも実行先へ置換する。
 * **遅延描画・スクロール対応：** ページ全体とモーダルなどのスクロール領域を上下に探索し、iframe内やLazy Loadされた要素も再検索。操作後は通常DOMとopen Shadow DOMの変化が落ち着くまで待機。
 * **待機アクション：** シナリオでは `scroll`、`wait`、`wait_for`を利用可能。レコーダーはページだけでなく、モーダルなどの内部スクロールも対象と位置をまとめて記録。
 
@@ -94,6 +95,29 @@ AutoEventTracker/              # ツール全体のルートディレクトリ
 * **Adobe Analytics / AEP Web SDK：** `adobe_analytics.py` がLegacy AAとAEPの判定、AAパラメータ・XDMからの値抽出、識別情報生成を担当。
 * **共通処理：** `excel_reporter.py` は登録済みアダプターを順番に実行し、ステップの整列、条件付き書式、列表示、Excel保存だけを担当。
 * **サービス追加：** `base.py` の `MeasurementAdapter` を継承したクラスを作り、`register_adapter()` へ登録する。KARTEなどを追加する場合も既存のGA4・AAロジックを変更せず、専用シートと専用アダプターを追加できる。
+
+### 実行環境の登録とCLI実行
+
+プロジェクト設定画面の「実行環境」へ、1行に1環境を登録します。
+
+```text
+本番 = https://www.example.com
+ステージング = https://stg.example.com
+```
+
+登録環境を指定する場合：
+
+```bash
+python3 tracker.py my_project scenario.json --environment ステージング --headless
+```
+
+今回だけ開始URLを変更する場合：
+
+```bash
+python3 tracker.py my_project scenario.json --start-url https://test01.example.com/path/ --headless
+```
+
+`--start-url`は`--environment`より優先され、プロジェクト設定やシナリオJSONは変更しません。
 
 
 

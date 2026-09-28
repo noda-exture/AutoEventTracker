@@ -208,6 +208,28 @@ class Ui_MainWindow:
         exec_header.addWidget(self.chk_headless, stretch=1)
         layout.addLayout(exec_header)
 
+        environment_row = QHBoxLayout()
+        environment_row.setSpacing(12)
+        lbl_environment = QLabel("実行環境:")
+        lbl_environment.setProperty("class", "bold-label")
+        lbl_environment.setFixedWidth(130)
+        self.combo_environment = QComboBox()
+        self.combo_environment.setToolTip("プロジェクト設定に登録した環境を選択します。")
+        environment_row.addWidget(lbl_environment)
+        environment_row.addWidget(self.combo_environment, stretch=1)
+        layout.addLayout(environment_row)
+
+        override_row = QHBoxLayout()
+        override_row.setSpacing(12)
+        self.chk_override_start_url = QCheckBox("今回だけ開始URLを変更")
+        self.chk_override_start_url.setFixedWidth(190)
+        self.txt_start_url_override = QLineEdit()
+        self.txt_start_url_override.setPlaceholderText("例: https://test01.example.com/path/")
+        self.txt_start_url_override.setEnabled(False)
+        override_row.addWidget(self.chk_override_start_url)
+        override_row.addWidget(self.txt_start_url_override, stretch=1)
+        layout.addLayout(override_row)
+
         # 情報カード：右端ギリギリまで広がり、文字の下部が切れないレイアウト
         self.info_frame = QFrame()
         self.info_frame.setObjectName("infoFrame")
@@ -234,6 +256,10 @@ class Ui_MainWindow:
         lbl_i3.setProperty("class", "bold-label")
         lbl_i3.setFixedWidth(130)
 
+        lbl_i4 = QLabel("今回の実行URL:")
+        lbl_i4.setProperty("class", "bold-label")
+        lbl_i4.setFixedWidth(130)
+
         # 値ラベル：セル幅いっぱいに引き伸ばす（alignment 引数を外す）
         self.lbl_info_name = QLabel("-")
         self.lbl_info_name.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
@@ -248,6 +274,12 @@ class Ui_MainWindow:
         self.lbl_info_memo.setWordWrap(True)
         self.lbl_info_memo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
+        self.lbl_info_effective_url = QLabel("-")
+        self.lbl_info_effective_url.setObjectName("infoUrlLabel")
+        self.lbl_info_effective_url.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.lbl_info_effective_url.setWordWrap(True)
+        self.lbl_info_effective_url.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+
         # グリッドへ配置（右側ラベルは横幅いっぱいに拡張）
         info_layout.addWidget(lbl_i1, 0, 0, Qt.AlignTop)
         info_layout.addWidget(self.lbl_info_name, 0, 1)
@@ -255,8 +287,11 @@ class Ui_MainWindow:
         info_layout.addWidget(lbl_i2, 1, 0, Qt.AlignTop)
         info_layout.addWidget(self.lbl_info_url, 1, 1)
 
-        info_layout.addWidget(lbl_i3, 2, 0, Qt.AlignTop)
-        info_layout.addWidget(self.lbl_info_memo, 2, 1)
+        info_layout.addWidget(lbl_i4, 2, 0, Qt.AlignTop)
+        info_layout.addWidget(self.lbl_info_effective_url, 2, 1)
+
+        info_layout.addWidget(lbl_i3, 3, 0, Qt.AlignTop)
+        info_layout.addWidget(self.lbl_info_memo, 3, 1)
 
         layout.addWidget(self.info_frame)
 
@@ -353,16 +388,29 @@ class Ui_MainWindow:
         self.input_task.setPlaceholderText("例: カート追加イベントのパケット検証")
         self.input_task.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
+        self.input_environments = QTextEdit()
+        self.input_environments.setPlaceholderText(
+            "1行に1環境を「環境名 = ベースURL」で入力\n"
+            "例: 本番 = https://www.example.com\n"
+            "    ステージング = https://stg.example.com"
+        )
+        self.input_environments.setFixedHeight(100)
+        self.input_environments.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
         lbl_p1 = QLabel("プロジェクトID（半角英数字推奨）:")
         lbl_p1.setProperty("class", "bold-label")
         lbl_p2 = QLabel("クライアント名:")
         lbl_p2.setProperty("class", "bold-label")
         lbl_p3 = QLabel("検証タスク名:")
         lbl_p3.setProperty("class", "bold-label")
+        lbl_p4 = QLabel("実行環境:")
+        lbl_p4.setProperty("class", "bold-label")
+        lbl_p4.setToolTip("シナリオ実行時に選べるサブドメインを登録します。")
 
         form_layout.addRow(lbl_p1, self.input_proj_id)
         form_layout.addRow(lbl_p2, self.input_client)
         form_layout.addRow(lbl_p3, self.input_task)
+        form_layout.addRow(lbl_p4, self.input_environments)
 
         layout.addWidget(form_frame)
 
