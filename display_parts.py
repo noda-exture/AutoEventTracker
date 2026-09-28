@@ -86,8 +86,8 @@ class CheckMarkBox(QCheckBox):
 class Ui_MainWindow:
     def setupUi(self, main_window):
         main_window.setWindowTitle("AutoEventTracker")
-        main_window.setMinimumSize(1100, 800)
-        main_window.resize(1280, 900)
+        main_window.setMinimumSize(1100, 720)
+        main_window.resize(1280, 800)
 
         self.stacked_widget = QStackedWidget()
         main_window.setCentralWidget(self.stacked_widget)
@@ -158,11 +158,12 @@ class Ui_MainWindow:
         self.tabs = QTabWidget()
         self.tabs.setObjectName("workspaceTabs")
         self.tabs.setDocumentMode(True)
-        self.tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.tabs.addTab(self._create_analysis_tab(), "計測データ比較")
         self.tabs.addTab(self._create_execution_tab(), "シナリオ実行")
         self.tabs.addTab(self._create_scenario_tab(), "シナリオ作成")
         operation_layout.addWidget(self.tabs)
+        operation_layout.addStretch(1)
         workspace_layout.addWidget(operation_panel, stretch=1)
 
         log_panel = QWidget()
@@ -188,12 +189,14 @@ class Ui_MainWindow:
     def _create_analysis_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setSpacing(16)
-        layout.setContentsMargins(20, 24, 20, 20)
+        layout.setSpacing(26)
+        layout.setContentsMargins(20, 28, 20, 28)
 
+        file1_group = QVBoxLayout()
+        file1_group.setSpacing(7)
         lbl_f1 = QLabel("最新の計測データ")
         lbl_f1.setProperty("class", "bold-label")
-        layout.addWidget(lbl_f1)
+        file1_group.addWidget(lbl_f1)
 
         row1 = QHBoxLayout()
         row1.setSpacing(10)
@@ -203,11 +206,14 @@ class Ui_MainWindow:
         self.btn_f1.setObjectName("secondaryBtn")
         row1.addWidget(self.txt_f1)
         row1.addWidget(self.btn_f1)
-        layout.addLayout(row1)
+        file1_group.addLayout(row1)
+        layout.addLayout(file1_group)
 
+        file2_group = QVBoxLayout()
+        file2_group.setSpacing(7)
         lbl_f2 = QLabel("比較元の計測データ")
         lbl_f2.setProperty("class", "bold-label")
-        layout.addWidget(lbl_f2)
+        file2_group.addWidget(lbl_f2)
 
         row2 = QHBoxLayout()
         row2.setSpacing(10)
@@ -217,34 +223,38 @@ class Ui_MainWindow:
         self.btn_f2.setObjectName("secondaryBtn")
         row2.addWidget(self.txt_f2)
         row2.addWidget(self.btn_f2)
-        layout.addLayout(row2)
+        file2_group.addLayout(row2)
+        layout.addLayout(file2_group)
 
+        output_group = QVBoxLayout()
+        output_group.setSpacing(7)
         lbl_out = QLabel("出力するExcelファイル名:")
         lbl_out.setProperty("class", "bold-label")
-        layout.addWidget(lbl_out)
+        output_group.addWidget(lbl_out)
 
         self.txt_out = QLineEdit("result.xlsx")
-        layout.addWidget(self.txt_out)
+        output_group.addWidget(self.txt_out)
+        layout.addLayout(output_group)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
         self.progress.setVisible(False)
         layout.addWidget(self.progress)
+        layout.addStretch(1)
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(12)
         self.btn_run_analysis = QPushButton("比較レポートを生成")
-        self.btn_run_analysis.setObjectName("primaryBtn")
+        self.btn_run_analysis.setObjectName("actionBtn")
         self.btn_run_analysis.setCursor(Qt.PointingHandCursor)
         
         self.btn_open = QPushButton("出力フォルダを開く")
-        self.btn_open.setObjectName("secondaryBtn")
+        self.btn_open.setObjectName("secondaryActionBtn")
         self.btn_open.setCursor(Qt.PointingHandCursor)
 
-        btn_row.addWidget(self.btn_run_analysis, stretch=3)
-        btn_row.addWidget(self.btn_open, stretch=1)
+        btn_row.addWidget(self.btn_run_analysis, stretch=3, alignment=Qt.AlignBottom)
+        btn_row.addWidget(self.btn_open, stretch=1, alignment=Qt.AlignBottom)
         layout.addLayout(btn_row)
-        layout.addStretch()
 
         return tab
 
@@ -252,13 +262,14 @@ class Ui_MainWindow:
     def _create_execution_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setAlignment(Qt.AlignTop)
-        layout.setContentsMargins(20, 24, 20, 20)
-        layout.setSpacing(16)
+        layout.setContentsMargins(20, 28, 20, 28)
+        layout.setSpacing(24)
 
+        scenario_group = QVBoxLayout()
+        scenario_group.setSpacing(7)
         lbl_exec = QLabel("実行するシナリオ:")
         lbl_exec.setProperty("class", "bold-label")
-        layout.addWidget(lbl_exec)
+        scenario_group.addWidget(lbl_exec)
 
         exec_header = QHBoxLayout()
         exec_header.setSpacing(16)
@@ -268,18 +279,18 @@ class Ui_MainWindow:
 
         self.chk_headless = CheckMarkBox("ブラウザを表示せずに実行")
         exec_header.addWidget(self.chk_headless, stretch=1)
-        layout.addLayout(exec_header)
+        scenario_group.addLayout(exec_header)
+        layout.addLayout(scenario_group)
 
-        environment_row = QHBoxLayout()
-        environment_row.setSpacing(12)
+        environment_group = QVBoxLayout()
+        environment_group.setSpacing(7)
         lbl_environment = QLabel("実行環境:")
         lbl_environment.setProperty("class", "bold-label")
-        lbl_environment.setFixedWidth(130)
         self.combo_environment = QComboBox()
         self.combo_environment.setToolTip("プロジェクト設定に登録した環境を選択します。")
-        environment_row.addWidget(lbl_environment)
-        environment_row.addWidget(self.combo_environment, stretch=1)
-        layout.addLayout(environment_row)
+        environment_group.addWidget(lbl_environment)
+        environment_group.addWidget(self.combo_environment)
+        layout.addLayout(environment_group)
 
         override_layout = QVBoxLayout()
         override_layout.setSpacing(8)
@@ -356,6 +367,7 @@ class Ui_MainWindow:
         info_layout.addWidget(self.lbl_info_memo, 3, 1)
 
         layout.addWidget(self.info_frame)
+        layout.addStretch(1)
 
         self.btn_exec_scenario = QPushButton("シナリオを実行")
         self.btn_exec_scenario.setObjectName("actionBtn")
@@ -368,37 +380,45 @@ class Ui_MainWindow:
     def _create_scenario_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
-        layout.setAlignment(Qt.AlignTop)
-        layout.setContentsMargins(20, 24, 20, 20)
-        layout.setSpacing(14)
+        layout.setContentsMargins(20, 28, 20, 28)
+        layout.setSpacing(28)
 
+        file_group = QVBoxLayout()
+        file_group.setSpacing(7)
         lbl_s1 = QLabel("① シナリオファイル名:")
         lbl_s1.setProperty("class", "bold-label")
-        layout.addWidget(lbl_s1)
+        file_group.addWidget(lbl_s1)
 
         self.txt_scenario_file_auto = QLineEdit()
         self.txt_scenario_file_auto.setPlaceholderText("例: my_scenario.json")
-        layout.addWidget(self.txt_scenario_file_auto)
+        file_group.addWidget(self.txt_scenario_file_auto)
+        layout.addLayout(file_group)
 
+        url_group = QVBoxLayout()
+        url_group.setSpacing(7)
         lbl_s2 = QLabel("② 記録を開始するURL:")
         lbl_s2.setProperty("class", "bold-label")
-        layout.addWidget(lbl_s2)
+        url_group.addWidget(lbl_s2)
 
         self.txt_url_auto = QLineEdit()
         self.txt_url_auto.setPlaceholderText("例: https://shop.example.com/")
-        layout.addWidget(self.txt_url_auto)
+        url_group.addWidget(self.txt_url_auto)
+        layout.addLayout(url_group)
 
+        memo_group = QVBoxLayout()
+        memo_group.setSpacing(7)
         lbl_s3 = QLabel("③ シナリオの概要（任意）:")
         lbl_s3.setProperty("class", "bold-label")
-        layout.addWidget(lbl_s3)
+        memo_group.addWidget(lbl_s3)
 
         self.txt_memo_auto = QLineEdit()
         self.txt_memo_auto.setPlaceholderText("例: 新規会員登録から購入完了までの正常系フロー")
-        layout.addWidget(self.txt_memo_auto)
+        memo_group.addWidget(self.txt_memo_auto)
+        layout.addLayout(memo_group)
 
-        layout.addSpacing(6)
+        layout.addStretch(1)
         self.btn_record_auto = QPushButton("ブラウザ操作の記録を開始")
-        self.btn_record_auto.setObjectName("dangerBtn")
+        self.btn_record_auto.setObjectName("actionBtn")
         self.btn_record_auto.setCursor(Qt.PointingHandCursor)
         self.btn_record_auto.setToolTip(
             "ボタンを押すとブラウザが開きます。\n"
@@ -514,8 +534,10 @@ class Ui_MainWindow:
         self.btn_confirm_proj.setObjectName("primaryBtn")
         self.btn_confirm_proj.setCursor(Qt.PointingHandCursor)
 
-        btn_layout.addWidget(self.btn_cancel_proj)
-        btn_layout.addWidget(self.btn_confirm_proj)
+        btn_layout.addStretch(1)
+        btn_layout.addWidget(self.btn_cancel_proj, stretch=1)
+        btn_layout.addWidget(self.btn_confirm_proj, stretch=1)
+        btn_layout.addStretch(1)
         layout.addLayout(btn_layout)
 
         self.stacked_widget.addWidget(create_widget)
