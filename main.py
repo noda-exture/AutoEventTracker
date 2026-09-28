@@ -80,6 +80,44 @@ def resolve_project_directory(project_name, project_root="project"):
     return target_path
 
 
+def ensure_project_directories(project_dir):
+    for folder_name in ("outputs", "scenario", "logs"):
+        os.makedirs(os.path.join(project_dir, folder_name), exist_ok=True)
+
+
+def append_project_log(project_name, message, project_root="project", now=None):
+    if not project_name or not str(message).strip():
+        return ""
+
+    project_dir = resolve_project_directory(project_name, project_root)
+    if not os.path.isdir(project_dir):
+        return ""
+
+    logs_dir = os.path.join(project_dir, "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    log_date = (now or datetime.now()).strftime("%Y%m%d")
+    log_path = os.path.join(logs_dir, f"{log_date}.log")
+
+    prefix = ""
+    if os.path.isfile(log_path) and os.path.getsize(log_path) > 0:
+        with open(log_path, "rb") as existing_log:
+            existing_log.seek(-1, os.SEEK_END)
+            if existing_log.read(1) != b"\n":
+                prefix = "\n"
+
+    entry = str(message).rstrip("\r\n")
+    with open(log_path, "a", encoding="utf-8") as log_file:
+        log_file.write(f"{prefix}{entry}\n")
+    return log_path
+
+
+def format_project_settings(project_id, config):
+    settings = {"project_id": project_id}
+    if isinstance(config, dict):
+        settings.update(config)
+    return json.dumps(settings, ensure_ascii=False, indent=2, sort_keys=True)
+
+
 def normalize_trash_result(result):
     """Support both PySide6 return shapes for QFile.moveToTrash()."""
     if isinstance(result, tuple):
@@ -428,6 +466,7 @@ class AutoTrackerApp(QMainWindow):
         self.ui.tpl_frame.setVisible(True)
         self.ui.btn_delete_proj.setVisible(True)
         self.ui.stacked_widget.setCurrentIndex(1)
+        self.log_write(f"プロジェクト設定の編集画面を開きました: {current_proj}\n", project_name=current_proj)
 
     def delete_project_action(self):
         project_name = self.current_editing_proj.strip()
@@ -456,12 +495,15 @@ class AutoTrackerApp(QMainWindow):
         if answer != QMessageBox.Yes:
             return
 
+        delete_log = f"プロジェクトの削除処理を開始しました: {project_name}\n"
+        self.log_write(delete_log, project_name=project_name)
         moved, _ = normalize_trash_result(QFile.moveToTrash(project_dir))
         if not moved:
+            self.log_write(f"プロジェクトの削除に失敗しました: {project_name}\n", project_name=project_name)
             QMessageBox.critical(self, "削除エラー", "プロジェクトを削除できませんでした。")
             return
 
-        self.log_write(f"プロジェクトを削除しました: {project_name}\n")
+        self.log_write(f"プロジェクトを削除しました: {project_name}\n", persist=False)
         self.current_editing_proj = ""
         self.is_edit_mode = False
         self.refresh_project_list()
@@ -495,7 +537,6 @@ class AutoTrackerApp(QMainWindow):
                     return
                 try:
                     os.rename(old_dir, new_dir)
-                    self.log_write(f"プロジェクトフォルダ名を変更しました: {old_proj_id} -> {proj_id}\n")
                 except Exception as e:
                     QMessageBox.critical(self, "リネームエラー", f"フォルダ名の変更に失敗しました:\n{str(e)}")
                     return
@@ -509,10 +550,12 @@ class AutoTrackerApp(QMainWindow):
                         config_data = json.load(f)
                 except Exception:
                     config_data = {}
-            
+
+            before_settings = format_project_settings(old_proj_id, config_data)
             config_data["client_name"] = client
             config_data["task_name"] = task
             config_data["environments"] = environments
+            after_settings = format_project_settings(proj_id, config_data)
 
             try:
                 with open(config_path, "w", encoding="utf-8") as f:
@@ -524,6 +567,13 @@ class AutoTrackerApp(QMainWindow):
             self.refresh_project_list()
             idx = self.ui.combo_proj.findText(proj_id)
             if idx >= 0: self.ui.combo_proj.setCurrentIndex(idx)
+            update_target = f"{old_proj_id} -> {proj_id}" if proj_id != old_proj_id else proj_id
+            self.log_write(
+                f"プロジェクト設定を更新しました: {update_target}\n"
+                f"変更前:\n{before_settings}\n"
+                f"変更後:\n{after_settings}\n",
+                project_name=proj_id,
+            )
             QMessageBox.information(self, "保存完了", f"プロジェクト '{proj_id}' の設定を更新しました！")
 
         else:
@@ -545,8 +595,7 @@ class AutoTrackerApp(QMainWindow):
                 }
             }
             try:
-                os.makedirs(os.path.join(proj_dir, "outputs"), exist_ok=True)
-                os.makedirs(os.path.join(proj_dir, "scenario"), exist_ok=True)
+                ensure_project_directories(proj_dir)
                 copy_default_template(proj_dir)
                 with open(os.path.join(proj_dir, "config.json"), "w", encoding="utf-8") as f:
                     json.dump(config_data, f, indent=4, ensure_ascii=False)
@@ -559,6 +608,11 @@ class AutoTrackerApp(QMainWindow):
             self.refresh_project_list()
             idx = self.ui.combo_proj.findText(proj_id)
             if idx >= 0: self.ui.combo_proj.setCurrentIndex(idx)
+            self.log_write(
+                f"プロジェクトを作成しました: {proj_id}\n"
+                f"設定情報:\n{format_project_settings(proj_id, config_data)}\n",
+                project_name=proj_id,
+            )
             QMessageBox.information(self, "成功", f"プロジェクト '{proj_id}' を作成しました！")
 
         self.ui.stacked_widget.setCurrentIndex(0)
@@ -587,10 +641,17 @@ class AutoTrackerApp(QMainWindow):
                 "ここにカスタムデザインの template.xlsx を配置すると、突合比較時に優先して読み込まれます。"
             )
 
-    def log_write(self, msg):
+    def log_write(self, msg, project_name=None, persist=True):
         self.ui.txt_log.moveCursor(QTextCursor.End)
         self.ui.txt_log.insertPlainText(msg)
         self.ui.txt_log.verticalScrollBar().setValue(self.ui.txt_log.verticalScrollBar().maximum())
+        if not persist:
+            return
+        target_project = project_name or self.ui.combo_proj.currentText().strip()
+        try:
+            append_project_log(target_project, msg)
+        except (OSError, ValueError):
+            pass
 
     def select_file(self, target_lineedit):
         proj = self.ui.combo_proj.currentText()
