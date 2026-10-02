@@ -952,10 +952,6 @@ def run_tracker(
                 print(f"計測データを保存しました: {output_path}\n")
                 
                 success = True
-                if not headless:
-                    pause_page = registry.get_live(runtime_state["active_page_id"])
-                    if pause_page is not None:
-                        pause_page.pause()
                 browser.close()
                 break 
             else:
