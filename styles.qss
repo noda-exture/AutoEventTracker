@@ -109,6 +109,7 @@ QTabBar::tab:selected {
 
 /* Inputs */
 QLineEdit,
+QSpinBox,
 QComboBox,
 QTextEdit {
     background-color: #FFFFFF;
@@ -120,17 +121,20 @@ QTextEdit {
 }
 
 QLineEdit,
+QSpinBox,
 QComboBox {
     min-height: 22px;
     padding: 8px 11px;
 }
 
 QLineEdit:hover,
+QSpinBox:hover,
 QComboBox:hover {
     border-color: #AEB8C8;
 }
 
 QLineEdit:focus,
+QSpinBox:focus,
 QComboBox:focus,
 QTextEdit:focus {
     border: 1px solid #6FBA2C;

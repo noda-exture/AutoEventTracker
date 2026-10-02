@@ -96,7 +96,56 @@ AutoEventTracker/              # ツール全体のルートディレクトリ
 * **共通処理：** `excel_reporter.py` は登録済みアダプターを順番に実行し、ステップの整列、条件付き書式、列表示、Excel保存だけを担当。
 * **サービス追加：** `base.py` の `MeasurementAdapter` を継承したクラスを作り、`register_adapter()` へ登録する。KARTEなどを追加する場合も既存のGA4・AAロジックを変更せず、専用シートと専用アダプターを追加できる。
 
-### 実行環境の登録とCLI実行
+### 共通デバイス設定（global_config.json）
+
+リポジトリ直下の `global_config.json` に全案件共通の設定を置きます。
+案件別の `project/<案件名>/config.json` は従来どおりURL・計測・レポート設定に使います。
+
+`devices` はデバイスIDをキーとするオブジェクト、`default_device` は初期選択するIDです。
+各デバイスには以下を指定します。
+
+| キー | 内容 |
+| --- | --- |
+| `name` | 実行画面の表示名 |
+| `user_agent` | User-Agent文字列。`null`なら実行ブラウザの標準値 |
+| `viewport` | ページ表示領域の `width`・`height`（CSSピクセル、正の整数） |
+| `screen` | 端末画面の `width`・`height`（CSSピクセル、正の整数） |
+| `device_scale_factor` | デバイス倍率（正の数） |
+| `is_mobile` | モバイル表示のエミュレーション（`true` / `false`） |
+| `has_touch` | タッチ対応（`true` / `false`） |
+
+GUIでは「シナリオ実行」の「実行デバイス」から選択します。デバイスの追加・名称変更はアプリの再起動で一覧に反映されます。
+通常実行・ヘッドレス実行の両方に適用されます。デバイス未指定時は共通設定の `default_device` を使います。
+
+```bash
+python tracker.py ex-ture scenario.json --device android_phone
+python tracker.py ex-ture scenario.json --device desktop --headless
+```
+
+初期値はPC・Androidスマートフォン・Androidタブレット・iPhone 13・iPad 第7世代の例です。
+iPhoneとiPadは `--device iphone` / `--device ipad` で指定できます。
+Apple端末のUser-Agent・表示領域・倍率・タッチ設定は導入済みPlaywrightのプリセットを参考にしています。
+iPhoneの表示領域は390×664、画面全体は390×844です。固定User-Agentのバージョンは必要に応じて編集してください。
+ブラウザエンジンはChromiumです。User-Agent・表示サイズなどを変えても実機やSafariと同一にはなりません。
+今回の設定はシナリオ実行用で、自動レコーダーには適用しません。
+計測結果JSONの `execution_device` に、選択ID・表示名と適用した設定を保存します。
+設定ファイルの欠落・不正値・未登録のデバイスIDはエラーにし、別設定で実行しません。
+
+記録ブラウザの初期サイズは、同じ `global_config.json` の `recording.viewport` で指定します。
+
+```json
+"recording": {
+  "viewport": {"width": 1280, "height": 800}
+}
+```
+
+「シナリオ作成」タブの幅・高さで今回の記録サイズを変更できます（1～16384 px）。
+記録サイズの初期値はアプリ起動時に読み込みます。指定値はツールバーを除いたページ表示領域で、外枠の寸法ではありません。
+CLIでは `node record.js <案件名> <ファイル名> <URL> "<メモ>" 1440 900` のように幅・高さを指定できます。
+省略時は共通設定を使用します。記録したサイズはシナリオJSONの `recording_settings.viewport` に保存します。
+記録サイズはシナリオ実行のデバイス設定を上書きしません。
+
+### 案件別の実行環境
 
 プロジェクト設定画面の「実行環境」へ、1行に1環境を登録します。
 

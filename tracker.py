@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, urlsplit, url
 from playwright.sync_api import sync_playwright
 
 from storage_paths import measurement_output_path, safe_file_component
+from global_settings import resolve_device, device_context_options
 
 def _safe_step_token(value):
     token = re.sub(r"[^\w-]+", "_", str(value or ""), flags=re.UNICODE).strip("_")
@@ -540,6 +541,7 @@ def run_tracker(
     headless=False,
     environment=None,
     start_url_override=None,
+    device=None,
 ):
     """
     Args:
@@ -547,6 +549,15 @@ def run_tracker(
         config_filename (str): 中間JSONのファイル名（例: 'master_A.json'）
         headless (bool): 画面を表示せずに実行するかどうか
     """
+    try:
+        execution_device = resolve_device(device)
+    except ValueError as error:
+        print(f"エラー: {error}")
+        return False
+    context_options = device_context_options(execution_device)
+    print(f"実行デバイス: {execution_device['name']} ({execution_device['id']})")
+    print(f"表示領域: {execution_device['viewport']} / 画面: {execution_device['screen']}")
+
     # 新しい案件別ディレクトリ構造のパスを構築
     project_dir = os.path.join("project", project_name)
     config_path = os.path.join(project_dir, "scenario", config_filename)
@@ -721,10 +732,7 @@ def run_tracker(
                 ]
             ) 
             
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-                viewport={"width": 1280, "height": 800}
-            )
+            context = browser.new_context(**context_options)
             
             context.on("request", handle_request)
             page = context.new_page()
@@ -936,6 +944,7 @@ def run_tracker(
                     "scenario_start_url": scenario_start_url,
                     "execution_start_url": execution_start_url,
                     "execution_environment": environment,
+                    "execution_device": execution_device,
                     "start_url_overridden": bool(start_url_override),
                     "step_capture_mode": "stable_step_id",
                     "tab_capture_mode": "stable_page_id",
@@ -972,6 +981,7 @@ if __name__ == "__main__":
     parser.add_argument("--headless", action="store_true", help="ブラウザを表示せずに実行")
     parser.add_argument("--environment", help="config.jsonに登録した実行環境名")
     parser.add_argument("--start-url", help="今回の実行だけで使用する開始URL")
+    parser.add_argument("--device", help="global_config.jsonのデバイスID（省略時はdefault_device）")
     args = parser.parse_args()
 
     succeeded = run_tracker(
@@ -980,5 +990,6 @@ if __name__ == "__main__":
         headless=args.headless,
         environment=args.environment,
         start_url_override=args.start_url,
+        device=args.device,
     )
     sys.exit(0 if succeeded else 1)

@@ -13,6 +13,7 @@ from PySide6.QtGui import QTextCursor
 
 from excel_reporter import generate_compare_report
 from display_parts import Ui_MainWindow
+from global_settings import load_global_config, resolve_device, load_recording_viewport, validate_recording_viewport
 from storage_paths import (
     comparison_output_filename,
     safe_file_component,
@@ -153,19 +154,22 @@ class ScenarioWorker(QThread):
     log = Signal(str)
     finished = Signal(bool)
 
-    def __init__(self, proj, scenario_file, headless, environment=None, start_url_override=None):
+    def __init__(self, proj, scenario_file, headless, environment=None, start_url_override=None, device=None):
         super().__init__()
         self.proj = proj
         self.scenario_file = scenario_file
         self.headless = headless
         self.environment = environment
         self.start_url_override = start_url_override
+        self.device = device
 
     def run(self):
         try:
             cmd = [sys.executable, "tracker.py", self.proj, self.scenario_file]
             if self.headless:
                 cmd.append("--headless")
+            if self.device is not None:
+                cmd.extend(["--device", self.device])
             if self.environment:
                 cmd.extend(["--environment", self.environment])
             if self.start_url_override:
@@ -193,17 +197,20 @@ class AutoRecordWorker(QThread):
     log = Signal(str)
     finished = Signal(bool)
 
-    def __init__(self, proj, filename, start_url, memo):
+    def __init__(self, proj, filename, start_url, memo, viewport=None):
         super().__init__()
         self.proj = proj
         self.filename = filename
         self.start_url = start_url
         self.memo = memo
+        self.viewport = viewport
 
     def run(self):
         try:
+            viewport = validate_recording_viewport(self.viewport) if self.viewport is not None else load_recording_viewport()
             process = subprocess.Popen(
-                ["node", "record.js", self.proj, self.filename, self.start_url, self.memo],
+                ["node", "record.js", self.proj, self.filename, self.start_url, self.memo,
+                 str(viewport['width']), str(viewport['height'])],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -250,6 +257,35 @@ class AutoTrackerApp(QMainWindow):
 
         # 初期化
         self.refresh_project_list()
+        self.refresh_devices()
+        self.refresh_recording_settings()
+
+    def refresh_recording_settings(self):
+        try:
+            viewport = load_recording_viewport()
+        except ValueError as error:
+            self.recording_settings_error = str(error)
+            self.log_write(f"{error}\n")
+            return
+        self.recording_settings_error = None
+        self.ui.spin_record_width.setValue(viewport['width'])
+        self.ui.spin_record_height.setValue(viewport['height'])
+
+    def refresh_devices(self):
+        previous = self.ui.combo_device.currentData()
+        self.ui.combo_device.clear()
+        try:
+            config = load_global_config()
+        except ValueError as error:
+            self.ui.combo_device.addItem("※ デバイス設定を確認してください", None)
+            self.ui.combo_device.setToolTip(str(error))
+            self.log_write(f"{error}\n")
+            return
+        for device_id, device in config['devices'].items():
+            self.ui.combo_device.addItem(device['name'], device_id)
+        selected = previous if previous in config['devices'] else config['default_device']
+        self.ui.combo_device.setCurrentIndex(self.ui.combo_device.findData(selected))
+        self.ui.combo_device.setToolTip("global_config.jsonに登録したデバイス設定を選択します。")
 
     def _bind_events(self):
         # 画面切替 / プロジェクト選択
@@ -735,6 +771,14 @@ class AutoTrackerApp(QMainWindow):
             return
 
         environment = self.ui.combo_environment.currentText() if self.ui.combo_environment.currentData() else None
+        device_id = self.ui.combo_device.currentData()
+        try:
+            if device_id is None:
+                raise ValueError("global_config.jsonのデバイス設定を確認し、アプリを再起動してください。")
+            execution_device = resolve_device(device_id)
+        except ValueError as error:
+            QMessageBox.warning(self, "デバイス設定エラー", str(error))
+            return
         start_url_override = (
             self.ui.txt_start_url_override.text().strip()
             if self.ui.chk_override_start_url.isChecked() else None
@@ -752,6 +796,7 @@ class AutoTrackerApp(QMainWindow):
         if start_url_override:
             self.log_write("開始URLは今回の実行だけ変更します。\n")
         self.log_write(f"実行URL: {execution_url}\n")
+        self.log_write(f"実行デバイス: {execution_device['name']}\n")
         self.log_write("==================================================\n")
         
         self.scenario_worker = ScenarioWorker(
@@ -760,6 +805,7 @@ class AutoTrackerApp(QMainWindow):
             headless_mode,
             environment=environment,
             start_url_override=start_url_override,
+            device=device_id,
         )
         self.scenario_worker.log.connect(self.log_write)
         self.scenario_worker.finished.connect(self.on_scenario_finished)
@@ -794,6 +840,13 @@ class AutoTrackerApp(QMainWindow):
         if not url:
             QMessageBox.warning(self, "エラー", "開始URLを入力してください。")
             return
+        if self.recording_settings_error:
+            QMessageBox.warning(self, "記録サイズの設定エラー", self.recording_settings_error)
+            return
+        viewport = validate_recording_viewport({
+            'width': self.ui.spin_record_width.value(),
+            'height': self.ui.spin_record_height.value(),
+        })
             
         if not filename.endswith(".json"):
             filename += ".json"
@@ -804,13 +857,14 @@ class AutoTrackerApp(QMainWindow):
         self.ui.txt_log.clear()
         self.log_write(f"[{datetime.now().strftime('%H:%M:%S')}] 操作レコーダーを起動します。\n")
         self.log_write(f"開始URL: {url}\n")
+        self.log_write(f"記録時の表示領域: {viewport['width']} × {viewport['height']} px\n")
         self.log_write(f"保存先: project/{proj}/scenario/{scenario_name}/{scenario_name}.json\n")
         if memo: self.log_write(f"メモ: {memo}\n")
         self.log_write("==================================================\n")
         self.log_write("起動したブラウザで操作を行い、終わったらブラウザを閉じてください。\n")
         
         # 引数にmemoを追加してワーカーを起動
-        self.record_worker = AutoRecordWorker(proj, filename, url, memo)
+        self.record_worker = AutoRecordWorker(proj, filename, url, memo, viewport=viewport)
         self.record_worker.log.connect(self.log_write)
         self.record_worker.finished.connect(lambda s, p=proj: self.on_record_finished(s, p))
         self.record_worker.start()

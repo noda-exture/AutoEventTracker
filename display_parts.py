@@ -1,7 +1,8 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
                                QPushButton, QComboBox, QTextEdit, QProgressBar,
                                QTabWidget, QStackedWidget, QFormLayout, QGridLayout,
-                               QFrame, QCheckBox, QSizePolicy, QStyle, QStyleOptionButton)
+                               QFrame, QCheckBox, QSizePolicy, QStyle, QStyleOptionButton,
+                               QScrollArea, QLayout, QSpinBox)
 from PySide6.QtCore import Qt
 from PySide6.QtCore import QPointF
 from PySide6.QtGui import QColor, QFontDatabase, QPainter, QPen
@@ -87,7 +88,7 @@ class Ui_MainWindow:
     def setupUi(self, main_window):
         main_window.setWindowTitle("AutoEventTracker")
         main_window.setMinimumSize(1100, 720)
-        main_window.resize(1280, 800)
+        main_window.resize(1280, 840)
 
         self.stacked_widget = QStackedWidget()
         main_window.setCentralWidget(self.stacked_widget)
@@ -158,12 +159,11 @@ class Ui_MainWindow:
         self.tabs = QTabWidget()
         self.tabs.setObjectName("workspaceTabs")
         self.tabs.setDocumentMode(True)
-        self.tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.tabs.addTab(self._create_analysis_tab(), "計測データ比較")
         self.tabs.addTab(self._create_execution_tab(), "シナリオ実行")
         self.tabs.addTab(self._create_scenario_tab(), "シナリオ作成")
         operation_layout.addWidget(self.tabs)
-        operation_layout.addStretch(1)
         workspace_layout.addWidget(operation_panel, stretch=1)
 
         log_panel = QWidget()
@@ -262,9 +262,20 @@ class Ui_MainWindow:
     # --- シナリオ実行タブ ---
     def _create_execution_tab(self):
         tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(20, 28, 20, 28)
-        layout.setSpacing(24)
+        outer = QVBoxLayout(tab)
+        outer.setContentsMargins(20, 12, 20, 20)
+        outer.setSpacing(16)
+        self.execution_scroll = QScrollArea()
+        self.execution_scroll.setWidgetResizable(True)
+        self.execution_scroll.setFrameShape(QFrame.NoFrame)
+        self.execution_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 12, 8, 12)
+        layout.setSpacing(18)
+        layout.setSizeConstraint(QLayout.SetMinAndMaxSize)
+        self.execution_scroll.setWidget(content)
+        outer.addWidget(self.execution_scroll, stretch=1)
 
         scenario_group = QVBoxLayout()
         scenario_group.setSpacing(7)
@@ -282,6 +293,18 @@ class Ui_MainWindow:
         exec_header.addWidget(self.chk_headless, stretch=1)
         scenario_group.addLayout(exec_header)
         layout.addLayout(scenario_group)
+
+        device_group = QVBoxLayout()
+        device_group.setSpacing(7)
+        lbl_device = QLabel("実行デバイス:")
+        lbl_device.setProperty("class", "bold-label")
+        device_group.addWidget(lbl_device)
+        device_row = QHBoxLayout()
+        self.combo_device = ArrowComboBox()
+        self.combo_device.setToolTip("global_config.jsonに登録したデバイス設定を選択します。")
+        device_row.addWidget(self.combo_device, stretch=1)
+        device_group.addLayout(device_row)
+        layout.addLayout(device_group)
 
         environment_group = QVBoxLayout()
         environment_group.setSpacing(7)
@@ -375,16 +398,27 @@ class Ui_MainWindow:
         self.btn_exec_scenario = QPushButton("シナリオを実行")
         self.btn_exec_scenario.setObjectName("actionBtn")
         self.btn_exec_scenario.setCursor(Qt.PointingHandCursor)
-        layout.addWidget(self.btn_exec_scenario)
+        outer.addWidget(self.btn_exec_scenario)
 
         return tab
 
     # --- シナリオ作成タブ ---
     def _create_scenario_tab(self):
         tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(20, 28, 20, 28)
-        layout.setSpacing(28)
+        outer = QVBoxLayout(tab)
+        outer.setContentsMargins(20, 12, 20, 20)
+        outer.setSpacing(16)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 12, 8, 12)
+        layout.setSpacing(24)
+        layout.setSizeConstraint(QLayout.SetMinAndMaxSize)
+        scroll.setWidget(content)
+        outer.addWidget(scroll, stretch=1)
 
         file_group = QVBoxLayout()
         file_group.setSpacing(7)
@@ -419,6 +453,24 @@ class Ui_MainWindow:
         memo_group.addWidget(self.txt_memo_auto)
         layout.addLayout(memo_group)
 
+        size_group = QVBoxLayout()
+        size_group.setSpacing(7)
+        size_label = QLabel("④ 記録ブラウザの表示サイズ（px）:")
+        size_label.setProperty("class", "bold-label")
+        size_group.addWidget(size_label)
+        size_row = QHBoxLayout()
+        self.spin_record_width = QSpinBox()
+        self.spin_record_height = QSpinBox()
+        for spin in (self.spin_record_width, self.spin_record_height):
+            spin.setRange(1, 16384)
+            spin.setButtonSymbols(QSpinBox.NoButtons)
+        size_row.addWidget(QLabel("幅"))
+        size_row.addWidget(self.spin_record_width, stretch=1)
+        size_row.addWidget(QLabel("高さ"))
+        size_row.addWidget(self.spin_record_height, stretch=1)
+        size_group.addLayout(size_row)
+        layout.addLayout(size_group)
+
         layout.addStretch(1)
         self.btn_record_auto = QPushButton("ブラウザ操作の記録を開始")
         self.btn_record_auto.setObjectName("actionBtn")
@@ -429,7 +481,7 @@ class Ui_MainWindow:
             "操作内容がシナリオJSONとして自動保存されます。"
         )
         self.btn_record_auto.setToolTipDuration(12000)
-        layout.addWidget(self.btn_record_auto)
+        outer.addWidget(self.btn_record_auto)
 
         return tab
 

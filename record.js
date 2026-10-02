@@ -2,6 +2,7 @@ const { chromium } = require('playwright-extra');
 const stealth = require('puppeteer-extra-plugin-stealth')();
 const fs = require('fs');
 const path = require('path');
+const { resolveRecordingViewport } = require('./recording_settings');
 
 // ステルスプラグインを有効化
 chromium.use(stealth);
@@ -74,8 +75,11 @@ const flushClosedPages = () => {
   console.log(`レコーダーを起動します...`);
   console.log(`対象URL: ${startUrl}`);
 
+  const viewport = resolveRecordingViewport(process.argv[6], process.argv[7]);
+  console.log(`記録時の表示領域: ${viewport.width} × ${viewport.height} px`);
+
   const browser = await chromium.launch({ headless: false });
-  const context = await browser.newContext();
+  const context = await browser.newContext({ viewport });
 
   //  【修正】保存処理を内部に移動し、browser.close() を確実に呼べるようにする
   const saveScenario = async () => {
@@ -105,6 +109,7 @@ const flushClosedPages = () => {
       scenario_name: scenarioName,
       start_url: startUrl,
       memo: finalMemo,
+      recording_settings: { viewport },
       steps: steps
     };
     
@@ -457,4 +462,7 @@ const flushClosedPages = () => {
   context.on('close', saveScenario);
   browser.on('disconnected', saveScenario);
   
-})();
+})().catch(error => {
+  console.error(`レコーダー実行エラー: ${error.message}`);
+  process.exit(1);
+});
