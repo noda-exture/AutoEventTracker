@@ -1,3 +1,4 @@
+import re
 import urllib.parse
 
 from .base import MeasurementAdapter
@@ -10,8 +11,15 @@ def get_nested_value(data, path, separator="."):
     for key in path.split(separator):
         if isinstance(current, dict) and key in current:
             current = current[key]
-        else:
+            continue
+        indexed_key = re.fullmatch(r"([^\[\]]+)\[(\d+)\]", key)
+        if not indexed_key or not isinstance(current, dict):
             return None
+        items = current.get(indexed_key.group(1))
+        index = int(indexed_key.group(2))
+        if not isinstance(items, list) or index >= len(items):
+            return None
+        current = items[index]
     return current
 
 
@@ -77,6 +85,9 @@ class AdobeAnalyticsAdapter(MeasurementAdapter):
                 value = get_nested_value(first_event, secondary_path)
                 if value is not None:
                     return value
+                # Dataの短縮キーもXDMより優先する。空文字の明示指定を保持。
+                if source_key and source_key in analytics_data:
+                    return analytics_data[source_key]
 
             if primary_path:
                 path = primary_path
@@ -99,7 +110,7 @@ class AdobeAnalyticsAdapter(MeasurementAdapter):
             if check_key == "pageName" or check_key.lower() == "page name":
                 return xdm_data.get("web", {}).get("webPageDetails", {}).get("name")
             if check_key == "events":
-                return analytics_data.get("events", xdm_data.get("eventType"))
+                return analytics_data.get("events")
 
         params = packet.get("params", {})
         if source_key and source_key in params:
