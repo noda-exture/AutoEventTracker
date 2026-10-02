@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+from copy import copy
 from datetime import datetime
 from functools import lru_cache
 from openpyxl import load_workbook
@@ -296,7 +297,20 @@ def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename
             if not url_row_idx and (source_key in ["g", "dl"] or "url" in label.lower()):
                 url_row_idx = r
 
-    OLD_START_ROW = 2 + len(mapping_rows) + 4
+    # 新旧どちらかにある未定義項目も比較表の末尾に追加する。
+    for mapping in adapter.discover_mappings(list(ev_new) + list(ev_old), mapping_rows):
+        row = ws.max_row + 1
+        values = ([mapping['source_key'], mapping['label'], mapping['description']]
+                  if START_DATA_COL == 4 else
+                  [mapping['source_key'], mapping['primary_path'], mapping['secondary_path'],
+                   mapping['label'], mapping['description']])
+        for col, value in enumerate(values, 1):
+            cell = ws.cell(row=row, column=col, value=value)
+            cell._style = copy(ws.cell(row=max(3, row - 1), column=col)._style)
+        mapping['row_idx'] = row
+        mapping_rows.append(mapping)
+
+    OLD_START_ROW = max(ws.max_row, 2) + 4
     ws.row_dimensions[2].height = 48
     ws.row_dimensions[OLD_START_ROW].height = 48
     
@@ -315,6 +329,11 @@ def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename
                          top=Side(style='thin', color='CCCCCC'), bottom=Side(style='thin', color='CCCCCC'))
 
     TITLE_COL = 4
+    # 生成テンプレートの案内用結合セルを解除してレポート見出しを配置する。
+    for merged in list(ws.merged_cells.ranges):
+        if merged.min_row <= 1 <= merged.max_row and merged.min_col <= TITLE_COL <= merged.max_col:
+            ws.unmerge_cells(str(merged))
+            ws.cell(row=1, column=merged.min_col).value = None
     ws.cell(row=1, column=TITLE_COL, value=f"【 現在データ (新) 】 ファイル: {latest_filename}").font = Font(name=ex_set["font_name"], bold=True, size=11, color="2E6930")
     ws.cell(row=OLD_START_ROW - 1, column=TITLE_COL, value=f"【 過去データ (旧) 】 ファイル: {base_filename}").font = Font(name=ex_set["font_name"], bold=True, size=11, color="4B6F96")
 

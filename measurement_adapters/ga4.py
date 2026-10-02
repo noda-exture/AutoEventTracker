@@ -49,6 +49,16 @@ class GA4Adapter(MeasurementAdapter):
     display_name = "GA4"
     aliases = ("google analytics 4",)
 
+    def discover_mappings(self, packets, existing):
+        known = {row['source_key'] for row in existing}
+        keys = {key for packet in packets for key in collect_params(packet)}
+        return [dict(source_key=key,
+                     primary_path=('ユーザープロパティ' if key.startswith(('up.', 'upn.')) else
+                                   'イベントパラメータ' if key.startswith(('ep.', 'epn.')) else '自動追加項目'),
+                     secondary_path='数値' if key.startswith(('epn.', 'upn.')) else '文字列', label=key,
+                     description='テンプレート未定義の送信項目（自動追加）')
+                for key in sorted(keys - known)]
+
     def matches_event(self, event):
         event_type = event.get("type", "")
         url_or_raw = event.get("url") or event.get("raw", "")

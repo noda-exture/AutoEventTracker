@@ -12,6 +12,10 @@ class MeasurementAdapter(ABC):
     display_name = ""
     aliases = ()
 
+    def discover_mappings(self, packets, existing):
+        """テンプレート未定義の送信項目を列挙する。"""
+        return []
+
     def filter_events(self, events: Iterable[dict]) -> list[dict]:
         return [event for event in events if self.matches_event(event)]
 

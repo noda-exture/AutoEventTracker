@@ -671,15 +671,18 @@ class PacketMatchingTests(unittest.TestCase):
         self.assertFalse(sheet.column_dimensions["F"].hidden)
 
         self.assertIsNone(sheet["F3"].fill.fill_type)
-        self.assertIsNone(sheet["F8"].fill.fill_type)
+        old_row = next(row for row in range(4, sheet.max_row + 1)
+                       if sheet.cell(row, 1).value == 'eVar1')
+        self.assertEqual(sheet.cell(old_row, 6).value, 'guest')
+        self.assertIsNone(sheet.cell(old_row, 6).fill.fill_type)
         formulas = {
             formula
             for rules in sheet.conditional_formatting._cf_rules.values()
             for rule in rules
             for formula in (rule.formula or [])
         }
-        self.assertIn('AND(F3<>"",F3<>F8,F3<>"最新になし")', formulas)
-        self.assertIn('AND(F8<>"",F8<>F3,F8<>"比較元になし")', formulas)
+        self.assertIn(f'AND(F3<>"",F3<>F{old_row},F3<>"最新になし")', formulas)
+        self.assertIn(f'AND(F{old_row}<>"",F{old_row}<>F3,F{old_row}<>"比較元になし")', formulas)
 
 
 if __name__ == "__main__":

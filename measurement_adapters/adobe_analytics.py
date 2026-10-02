@@ -8,7 +8,11 @@ def get_nested_value(data, path, separator="."):
     if not data or not isinstance(data, dict):
         return None
     current = data
-    for key in path.split(separator):
+    path_parts = path.split(separator)
+    for position, key in enumerate(path_parts):
+        remaining = separator.join(path_parts[position:])
+        if isinstance(current, dict) and remaining in current:
+            return current[remaining]
         if isinstance(current, dict) and key in current:
             current = current[key]
             continue
@@ -57,6 +61,47 @@ class AdobeAnalyticsAdapter(MeasurementAdapter):
     sheet_name = "Adobe Analytics"
     display_name = "Adobe Analytics"
     aliases = ("adobe", "adobe analytics", "aep", "aep web sdk")
+
+    def discover_mappings(self, packets, existing):
+        known_keys = {row['source_key'] for row in existing}
+        covered = set()
+        for row in existing:
+            if row['primary_path']:
+                path = row['primary_path']
+                covered.add(path if path.startswith('xdm.') else 'xdm.' + path)
+            if row['secondary_path']:
+                covered.add(row['secondary_path'])
+                if row['source_key']:
+                    covered.add('data.__adobe.analytics.' + row['source_key'])
+        found = {}
+
+        def walk(value, parts):
+            path = '.'.join(parts)
+            if any(path == p or path.startswith(p + '.') or path.startswith(p + '[')
+                   for p in covered):
+                return
+            # 配列は商品等の構造を保持して1行にする。既存の配列要素指定は個別に除外。
+            if isinstance(value, dict) and value:
+                for key, child in value.items():
+                    walk(child, parts + [key])
+            elif isinstance(value, list) and any(p.startswith(path + '[') for p in covered):
+                for index, child in enumerate(value):
+                    walk(child, parts[:-1] + [parts[-1] + f'[{index}]'])
+            else:
+                found[path] = dict(source_key='', primary_path=path if parts[0] == 'xdm' else '',
+                                   secondary_path=path if parts[0] == 'data' else '', label=path,
+                                   description='テンプレート未定義の送信項目（自動追加）')
+
+        for packet in packets:
+            for key in packet.get('params', {}):
+                if key not in known_keys:
+                    found['params:' + key] = dict(source_key=key, primary_path='', secondary_path='',
+                                                 label=key, description='テンプレート未定義の送信項目（自動追加）')
+            event = first_xdm_event(packet)
+            for root in ('xdm', 'data'):
+                if root in event:
+                    walk(event[root], [root])
+        return [found[key] for key in sorted(found)]
 
     def matches_event(self, event):
         event_type = event.get("type", "")
