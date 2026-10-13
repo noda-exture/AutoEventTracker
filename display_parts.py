@@ -525,6 +525,10 @@ class Ui_MainWindow:
         self.input_task.setPlaceholderText("例: カート追加イベントのパケット検証")
         self.input_task.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
+        self.input_default_url = QLineEdit()
+        self.input_default_url.setPlaceholderText("例: https://www.example.com/（任意）")
+        self.input_default_url.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
         self.input_environments = QTextEdit()
         self.input_environments.setPlaceholderText(
             "1行に1環境を「環境名 = ベースURL」で入力\n"
@@ -547,6 +551,9 @@ class Ui_MainWindow:
         form_layout.addRow(lbl_p1, self.input_proj_id)
         form_layout.addRow(lbl_p2, self.input_client)
         form_layout.addRow(lbl_p3, self.input_task)
+        default_url_label = QLabel("デフォルトURL:")
+        default_url_label.setProperty("class", "bold-label")
+        form_layout.addRow(default_url_label, self.input_default_url)
         form_layout.addRow(lbl_p4, self.input_environments)
 
         layout.addWidget(form_frame)

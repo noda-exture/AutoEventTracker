@@ -11,10 +11,25 @@ from main import (
     format_project_settings,
     normalize_trash_result,
     resolve_project_directory,
+    default_scenario_filename,
+    validate_default_url,
 )
 
 
 class ProjectCreationTests(unittest.TestCase):
+    def test_default_scenario_filename_uses_project_and_today(self):
+        self.assertEqual(default_scenario_filename('sample', datetime(2026, 10, 2)),
+                         'sample_20261002.json')
+        self.assertEqual(default_scenario_filename('', datetime(2026, 10, 2)), '')
+
+    def test_default_url_accepts_optional_http_urls(self):
+        self.assertEqual(validate_default_url(' https://example.com/path?a=1#section '),
+                         'https://example.com/path?a=1#section')
+        self.assertEqual(validate_default_url(''), '')
+        for invalid in ('example.com', 'file:///tmp/page.html', 'https://', 'https://exa mple.com'):
+            with self.subTest(url=invalid), self.assertRaises(ValueError):
+                validate_default_url(invalid)
+
     def test_default_template_is_copied_into_project(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             template_path = os.path.join(temp_dir, "template.xlsx")

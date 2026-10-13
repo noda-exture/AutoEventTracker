@@ -88,7 +88,7 @@ const flushClosedPages = () => {
     
     console.log(`\n終了操作を検知しました。シナリオを保存します...`);
     
-    const requestedFileName = path.basename(fileName.endsWith('.json') ? fileName : `${fileName}.json`);
+    const requestedFileName = path.basename(`${fileName.replace(/\.json$/i, '')}.json`);
     const scenarioName = requestedFileName
       .replace(/\.json$/i, '')
       .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')

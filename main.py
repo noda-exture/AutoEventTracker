@@ -5,6 +5,7 @@ import shutil
 import threading
 import subprocess
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from urllib.parse import urlsplit, urlunsplit
 
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QFileDialog
@@ -117,6 +118,20 @@ def format_project_settings(project_id, config):
     if isinstance(config, dict):
         settings.update(config)
     return json.dumps(settings, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def default_scenario_filename(project_name, now=None):
+    today = now or datetime.now(ZoneInfo('Asia/Tokyo'))
+    return f"{project_name}_{today:%Y%m%d}.json" if project_name else ''
+
+
+def validate_default_url(value):
+    url = value.strip()
+    if url:
+        parsed = urlsplit(url)
+        if parsed.scheme not in ('http', 'https') or not parsed.netloc or any(c.isspace() for c in url):
+            raise ValueError('デフォルトURLはhttp://またはhttps://で始まるURLを指定してください。')
+    return url
 
 
 def normalize_trash_result(result):
@@ -242,6 +257,8 @@ class AutoTrackerApp(QMainWindow):
         self.current_editing_proj = ""
         self.is_edit_mode = False # 新規作成か編集かを示すフラグ
         self.current_scenario_start_url = ""
+        self.recording_project = None
+        self.recording_defaults = {'filename': '', 'url': ''}
 
         # UIの読み込みとセットアップ
         self.ui = Ui_MainWindow()
@@ -297,6 +314,7 @@ class AutoTrackerApp(QMainWindow):
         self.ui.btn_open_template.clicked.connect(self.open_template_excel)
 
         self.ui.combo_proj.currentTextChanged.connect(self.update_scenario_list)
+        self.ui.tabs.currentChanged.connect(self.on_workspace_tab_changed)
         self.ui.combo_scenario.currentTextChanged.connect(self.load_scenario_info)
         self.ui.combo_environment.currentIndexChanged.connect(self.update_effective_url_preview)
         self.ui.chk_override_start_url.toggled.connect(self.on_start_url_override_toggled)
@@ -330,6 +348,7 @@ class AutoTrackerApp(QMainWindow):
             self.ui.btn_edit_proj.setEnabled(False)
 
     def update_scenario_list(self, proj_name):
+        self.refresh_recording_defaults(proj_name)
         self.load_project_environments(proj_name)
         self.ui.chk_override_start_url.setChecked(False)
         self.ui.txt_start_url_override.clear()
@@ -345,6 +364,28 @@ class AutoTrackerApp(QMainWindow):
                 self.ui.combo_scenario.addItem("※ シナリオJSONがありません")
         else:
             self.ui.combo_scenario.addItem("※ scenarioフォルダがありません")
+
+    def on_workspace_tab_changed(self, index):
+        if index == 2:
+            self.refresh_recording_defaults(self.ui.combo_proj.currentText())
+
+    def refresh_recording_defaults(self, project_name):
+        default_url = ''
+        config_path = os.path.join('project', project_name, 'config.json')
+        if project_name and os.path.exists(config_path):
+            try:
+                with open(config_path, encoding='utf-8') as file:
+                    config = json.load(file)
+                default_url = validate_default_url(config.get('default_url', ''))
+            except (OSError, ValueError, AttributeError, TypeError) as error:
+                self.log_write(f'デフォルトURLの読み込み警告: {error}\n')
+        values = {'filename': default_scenario_filename(project_name), 'url': default_url}
+        for key, field in [('filename', self.ui.txt_scenario_file_auto), ('url', self.ui.txt_url_auto)]:
+            if (project_name != self.recording_project or not field.text() or
+                    field.text() == self.recording_defaults[key]):
+                field.setText(values[key])
+        self.recording_defaults = values
+        self.recording_project = project_name
 
     def load_scenario_info(self, scenario_file):
         if not self.ui.chk_override_start_url.isChecked():
@@ -461,6 +502,7 @@ class AutoTrackerApp(QMainWindow):
         self.ui.input_proj_id.clear()
         self.ui.input_client.clear()
         self.ui.input_task.clear()
+        self.ui.input_default_url.clear()
         self.ui.input_environments.clear()
         
         self.ui.tpl_frame.setVisible(False)
@@ -483,6 +525,7 @@ class AutoTrackerApp(QMainWindow):
         config_path = os.path.join("project", current_proj, "config.json")
         client_name = ""
         task_name = ""
+        default_url = ""
         environments = {}
         if os.path.exists(config_path):
             try:
@@ -490,6 +533,7 @@ class AutoTrackerApp(QMainWindow):
                     cfg = json.load(f)
                     client_name = cfg.get("client_name", "")
                     task_name = cfg.get("task_name", "")
+                    default_url = cfg.get("default_url", "")
                     environments = cfg.get("environments", {})
             except Exception as e:
                 self.log_write(f"config.json 読み込み警告: {str(e)}\n")
@@ -497,6 +541,7 @@ class AutoTrackerApp(QMainWindow):
         self.ui.input_proj_id.setText(current_proj)
         self.ui.input_client.setText(client_name)
         self.ui.input_task.setText(task_name)
+        self.ui.input_default_url.setText(default_url if isinstance(default_url, str) else '')
         self.ui.input_environments.setPlainText(environment_lines(environments))
         
         self.ui.tpl_frame.setVisible(True)
@@ -550,6 +595,11 @@ class AutoTrackerApp(QMainWindow):
         proj_id = self.ui.input_proj_id.text().strip()
         client = self.ui.input_client.text().strip() or "クライアント名未設定"
         task = self.ui.input_task.text().strip() or "課題名未設定"
+        try:
+            default_url = validate_default_url(self.ui.input_default_url.text())
+        except ValueError as error:
+            QMessageBox.warning(self, "デフォルトURLの入力エラー", str(error))
+            return
 
         if not proj_id:
             QMessageBox.warning(self, "入力エラー", "プロジェクトIDを入力してください。")
@@ -590,6 +640,7 @@ class AutoTrackerApp(QMainWindow):
             before_settings = format_project_settings(old_proj_id, config_data)
             config_data["client_name"] = client
             config_data["task_name"] = task
+            config_data["default_url"] = default_url
             config_data["environments"] = environments
             after_settings = format_project_settings(proj_id, config_data)
 
@@ -622,6 +673,7 @@ class AutoTrackerApp(QMainWindow):
             config_data = {
                 "client_name": client,
                 "task_name": task,
+                "default_url": default_url,
                 "environments": environments,
                 "excel_setting": {
                     "font_name": "游ゴシック", "theme_color_new": "E2EFDA", "theme_color_old": "FFF2CC", "diff_color": "FFC7CE", "diff_font_color": "9C0006"
@@ -848,8 +900,7 @@ class AutoTrackerApp(QMainWindow):
             'height': self.ui.spin_record_height.value(),
         })
             
-        if not filename.endswith(".json"):
-            filename += ".json"
+        filename = filename[:-5] + ".json" if filename.lower().endswith(".json") else filename + ".json"
 
         scenario_name = safe_file_component(scenario_name_from_reference(filename))
             
