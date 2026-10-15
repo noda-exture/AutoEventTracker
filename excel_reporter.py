@@ -321,7 +321,6 @@ def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename
         "empty": PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
     }
     fonts = {
-        "diff": Font(name=ex_set["font_name"], bold=True, color=ex_set["diff_font_color"], size=9),
         "normal": Font(name=ex_set["font_name"], size=9),
         "header": Font(name=ex_set["font_name"], bold=True, size=10)
     }
@@ -440,7 +439,6 @@ def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename
                         f'{first_data_col}{row_new}<>"最新になし")'
                     ],
                     fill=fills["diff"],
-                    font=fonts["diff"],
                 ),
             )
             ws.conditional_formatting.add(
@@ -452,7 +450,6 @@ def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename
                         f'{first_data_col}{row_old}<>"比較元になし")'
                     ],
                     fill=fills["diff"],
-                    font=fonts["diff"],
                 ),
             )
 
