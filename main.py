@@ -325,6 +325,7 @@ class AutoTrackerApp(QMainWindow):
         self.ui.btn_f2.clicked.connect(lambda: self.select_file(self.ui.txt_f2))
         self.ui.txt_f1.textChanged.connect(self.update_comparison_output_name)
         self.ui.txt_f2.textChanged.connect(self.update_comparison_output_name)
+        self.ui.chk_compare.toggled.connect(self.update_comparison_output_name)
         self.ui.btn_run_analysis.clicked.connect(self.start_analysis)
         self.ui.btn_open.clicked.connect(self.open_dir)
 
@@ -758,6 +759,9 @@ class AutoTrackerApp(QMainWindow):
     def update_comparison_output_name(self, *_):
         latest_path = self.ui.txt_f1.text().strip().strip("'").strip('"')
         base_path = self.ui.txt_f2.text().strip().strip("'").strip('"')
+        if not self.ui.chk_compare.isChecked():
+            self.ui.txt_out.setText(f"{os.path.splitext(os.path.basename(latest_path))[0]}.xlsx" if latest_path else "result.xlsx")
+            return
         if not latest_path or not base_path:
             self.ui.txt_out.setText("result.xlsx")
             return
@@ -778,7 +782,9 @@ class AutoTrackerApp(QMainWindow):
         f2 = self.ui.txt_f2.text().strip().strip("'").strip('"')
         out = self.ui.txt_out.text().strip()
 
-        if not f1 or not f2 or not out:
+        if not self.ui.chk_compare.isChecked():
+            f2 = None
+        if not f1 or (self.ui.chk_compare.isChecked() and not f2) or not out:
             QMessageBox.warning(self, "入力エラー", "すべての項目を入力・選択してください。")
             return
         if not out.lower().endswith(".xlsx"):
@@ -788,7 +794,7 @@ class AutoTrackerApp(QMainWindow):
         self.ui.btn_run_analysis.setEnabled(False)
         self.ui.progress.setVisible(True)
         self.ui.txt_log.clear()
-        self.log_write(f"[{datetime.now().strftime('%H:%M:%S')}] 比較レポートの生成を開始します。\n")
+        self.log_write(f"[{datetime.now().strftime('%H:%M:%S')}] レポートの生成を開始します。\n")
 
         self.analysis_worker = ReporterWorker(proj, f1, f2, out, self.sig_log, self.sig_finish, self.sig_err)
         self.analysis_worker.start()

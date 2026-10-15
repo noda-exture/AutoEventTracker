@@ -364,3 +364,14 @@ QMessageBox QPushButton {
 QMessageBox QPushButton:hover {
     background-color: #5FA126;
 }
+
+/* Keep the baseline fields visible while comparison is off. */
+#comparisonInput QLineEdit:disabled,
+#comparisonInput QPushButton:disabled {
+    background-color: #EAECF0;
+    color: #98A2B3;
+    border-color: #D0D5DD;
+}
+#comparisonInput QLabel:disabled {
+    color: #98A2B3;
+}

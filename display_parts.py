@@ -2,9 +2,9 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineE
                                QPushButton, QComboBox, QTextEdit, QProgressBar,
                                QTabWidget, QStackedWidget, QFormLayout, QGridLayout,
                                QFrame, QCheckBox, QSizePolicy, QStyle, QStyleOptionButton,
-                               QScrollArea, QLayout, QSpinBox)
+                               QScrollArea, QLayout, QSpinBox, QAbstractButton)
 from PySide6.QtCore import Qt
-from PySide6.QtCore import QPointF
+from PySide6.QtCore import QPointF, QRectF, QSize
 from PySide6.QtGui import QColor, QFontDatabase, QPainter, QPen
 
 # ==========================================
@@ -53,6 +53,37 @@ class ArrowComboBox(QComboBox):
         center_y = self.height() / 2
         painter.drawLine(QPointF(center_x - 4, center_y - 2), QPointF(center_x, center_y + 2))
         painter.drawLine(QPointF(center_x, center_y + 2), QPointF(center_x + 4, center_y - 2))
+
+
+class ToggleSwitch(QAbstractButton):
+    """Keyboard-accessible switch with a label and a sliding thumb."""
+
+    def __init__(self, text, parent=None):
+        super().__init__(parent)
+        self.setText(text)
+        self.setCheckable(True)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
+    def sizeHint(self):
+        return QSize(62 + self.fontMetrics().horizontalAdvance(self.text()), 32)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor("#6FBA2C" if self.isChecked() else "#98A2B3"))
+        painter.drawRoundedRect(QRectF(2, 4, 44, 24), 12, 12)
+        painter.setBrush(QColor("#FFFFFF"))
+        painter.drawEllipse(QRectF(24 if self.isChecked() else 5, 7, 18, 18))
+        painter.setPen(QColor("#475467"))
+        painter.drawText(QRectF(56, 0, self.width() - 56, self.height()),
+                         Qt.AlignVCenter | Qt.AlignLeft, self.text())
+        if self.hasFocus():
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(QColor("#475467"), 1, Qt.DotLine))
+            painter.drawRoundedRect(QRectF(0.5, 1, self.width() - 1, self.height() - 2), 5, 5)
 
 
 class CheckMarkBox(QCheckBox):
@@ -193,9 +224,14 @@ class Ui_MainWindow:
         layout.setSpacing(26)
         layout.setContentsMargins(20, 28, 20, 28)
 
+        self.chk_compare = ToggleSwitch("比較")
+        self.chk_compare.setChecked(True)
+        layout.addWidget(self.chk_compare)
+
         file1_group = QVBoxLayout()
         file1_group.setSpacing(7)
         lbl_f1 = QLabel("最新の計測データ")
+        self.lbl_analysis_input = lbl_f1
         lbl_f1.setProperty("class", "bold-label")
         file1_group.addWidget(lbl_f1)
 
@@ -210,7 +246,10 @@ class Ui_MainWindow:
         file1_group.addLayout(row1)
         layout.addLayout(file1_group)
 
-        file2_group = QVBoxLayout()
+        self.comparison_input = QWidget()
+        self.comparison_input.setObjectName("comparisonInput")
+        file2_group = QVBoxLayout(self.comparison_input)
+        file2_group.setContentsMargins(0, 0, 0, 0)
         file2_group.setSpacing(7)
         lbl_f2 = QLabel("比較元の計測データ")
         lbl_f2.setProperty("class", "bold-label")
@@ -225,7 +264,11 @@ class Ui_MainWindow:
         row2.addWidget(self.txt_f2)
         row2.addWidget(self.btn_f2)
         file2_group.addLayout(row2)
-        layout.addLayout(file2_group)
+        layout.addWidget(self.comparison_input)
+        self.chk_compare.toggled.connect(self.comparison_input.setEnabled)
+        self.chk_compare.toggled.connect(
+            lambda enabled: self.lbl_analysis_input.setText("最新の計測データ" if enabled else "計測データ")
+        )
 
         output_group = QVBoxLayout()
         output_group.setSpacing(7)
@@ -245,7 +288,7 @@ class Ui_MainWindow:
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(12)
-        self.btn_run_analysis = QPushButton("比較レポートを生成")
+        self.btn_run_analysis = QPushButton("レポートを生成")
         self.btn_run_analysis.setObjectName("actionBtn")
         self.btn_run_analysis.setCursor(Qt.PointingHandCursor)
         
@@ -289,7 +332,8 @@ class Ui_MainWindow:
         self.combo_scenario.setObjectName("scenarioCombo")
         exec_header.addWidget(self.combo_scenario, stretch=2)
 
-        self.chk_headless = CheckMarkBox("ブラウザを表示せずに実行")
+        self.chk_headless = ToggleSwitch("ブラウザを表示しない")
+        self.chk_headless.setToolTip("ONにすると、ブラウザ画面を開かずに実行します")
         exec_header.addWidget(self.chk_headless, stretch=1)
         scenario_group.addLayout(exec_header)
         layout.addLayout(scenario_group)

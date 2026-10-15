@@ -260,7 +260,7 @@ def align_step_groups(events_new, events_old):
 def packet_display_name(packet, target_type):
     return get_adapter(target_type).packet_display_name(packet)
 
-def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename, base_filename):
+def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename, base_filename, compare=True):
     ex_set = config["excel_setting"]
     ext_rules = config["extraction_rules"]
     replace_placeholders_in_sheet(ws, config)
@@ -312,7 +312,8 @@ def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename
 
     OLD_START_ROW = max(ws.max_row, 2) + 4
     ws.row_dimensions[2].height = 48
-    ws.row_dimensions[OLD_START_ROW].height = 48
+    if compare:
+        ws.row_dimensions[OLD_START_ROW].height = 48
     
     fills = {
         "new": PatternFill(start_color=ex_set["theme_color_new"], end_color=ex_set["theme_color_new"], fill_type="solid"),
@@ -333,17 +334,18 @@ def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename
         if merged.min_row <= 1 <= merged.max_row and merged.min_col <= TITLE_COL <= merged.max_col:
             ws.unmerge_cells(str(merged))
             ws.cell(row=1, column=merged.min_col).value = None
-    ws.cell(row=1, column=TITLE_COL, value=f"【 現在データ (新) 】 ファイル: {latest_filename}").font = Font(name=ex_set["font_name"], bold=True, size=11, color="2E6930")
-    ws.cell(row=OLD_START_ROW - 1, column=TITLE_COL, value=f"【 過去データ (旧) 】 ファイル: {base_filename}").font = Font(name=ex_set["font_name"], bold=True, size=11, color="4B6F96")
+    ws.cell(row=1, column=TITLE_COL, value=f"【 {'現在データ (新)' if compare else '計測データ'} 】 ファイル: {latest_filename}").font = Font(name=ex_set["font_name"], bold=True, size=11, color="2E6930")
+    if compare:
+        ws.cell(row=OLD_START_ROW - 1, column=TITLE_COL, value=f"【 過去データ (旧) 】 ファイル: {base_filename}").font = Font(name=ex_set["font_name"], bold=True, size=11, color="4B6F96")
 
-    for idx, m_row in enumerate(mapping_rows):
-        target_old_row = OLD_START_ROW + 1 + idx
-        for col_i in range(1, START_DATA_COL):
-            orig_val = ws.cell(row=m_row["row_idx"], column=col_i).value
-            c_target = ws.cell(row=target_old_row, column=col_i, value=orig_val)
-            c_target.font = fonts["normal"]
-            c_target.fill = PatternFill(start_color="FAFAF7", end_color="FAFAF7", fill_type="solid")
-            c_target.border = thin_border
+        for idx, m_row in enumerate(mapping_rows):
+            target_old_row = OLD_START_ROW + 1 + idx
+            for col_i in range(1, START_DATA_COL):
+                orig_val = ws.cell(row=m_row["row_idx"], column=col_i).value
+                c_target = ws.cell(row=target_old_row, column=col_i, value=orig_val)
+                c_target.font = fonts["normal"]
+                c_target.fill = PatternFill(start_color="FAFAF7", end_color="FAFAF7", fill_type="solid")
+                c_target.border = thin_border
 
     current_col = START_DATA_COL
     total_output_cols = 0
@@ -361,13 +363,15 @@ def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename
             display_packet = p_new or p_old
             packet_name = adapter.packet_display_name(display_packet)
             p_label = f"{step_label}-{p_idx + 1}\n{packet_name}"
-            if p_new and not p_old:
+            if compare and p_new and not p_old:
                 p_label += "\n[最新のみ]"
-            elif p_old and not p_new:
+            elif compare and p_old and not p_new:
                 p_label += "\n[比較元のみ]"
                 
-            for cell_h, fill_h in [(ws.cell(row=2, column=current_col, value=p_label), fills["new"]),
-                                   (ws.cell(row=OLD_START_ROW, column=current_col, value=p_label), fills["old"])]:
+            headers = [(ws.cell(row=2, column=current_col, value=p_label), fills["new"])]
+            if compare:
+                headers.append((ws.cell(row=OLD_START_ROW, column=current_col, value=p_label), fills["old"]))
+            for cell_h, fill_h in headers:
                 cell_h.font = fonts["header"]
                 cell_h.fill = fill_h
                 cell_h.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -386,16 +390,16 @@ def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename
                     val_old = format_extracted_value(res_old)
 
                 c_new = ws.cell(row=row_new, column=current_col, value=val_new)
-                c_old = ws.cell(row=row_old, column=current_col, value=val_old)
+                c_old = ws.cell(row=row_old, column=current_col, value=val_old) if compare else None
                 
-                for c in [c_new, c_old]:
+                for c in ([c_new, c_old] if compare else [c_new]):
                     c.font = fonts["normal"]
                     c.border = thin_border
                     c.alignment = Alignment(horizontal="left", vertical="center")
 
-                if not p_new and p_old:
+                if compare and not p_new and p_old:
                     c_new.value = "最新になし"
-                elif p_new and not p_old:
+                elif compare and p_new and not p_old:
                     c_old.value = "比較元になし"
 
             current_col += 1
@@ -403,58 +407,60 @@ def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename
 
     if total_output_cols == 0: return
 
-    # 比較結果の色はセルへ直接設定せず、値の変更に追従する条件付き書式で付ける。
-    first_data_col = get_column_letter(START_DATA_COL)
-    last_data_col = get_column_letter(START_DATA_COL + total_output_cols - 1)
-    for idx, m_row in enumerate(mapping_rows):
-        row_new = m_row["row_idx"]
-        row_old = OLD_START_ROW + 1 + idx
-        new_range = f"{first_data_col}{row_new}:{last_data_col}{row_new}"
-        old_range = f"{first_data_col}{row_old}:{last_data_col}{row_old}"
+    if compare:
+        # 比較結果の色はセルへ直接設定せず、値の変更に追従する条件付き書式で付ける。
+        first_data_col = get_column_letter(START_DATA_COL)
+        last_data_col = get_column_letter(START_DATA_COL + total_output_cols - 1)
+        for idx, m_row in enumerate(mapping_rows):
+            row_new = m_row["row_idx"]
+            row_old = OLD_START_ROW + 1 + idx
+            new_range = f"{first_data_col}{row_new}:{last_data_col}{row_new}"
+            old_range = f"{first_data_col}{row_old}:{last_data_col}{row_old}"
 
-        ws.conditional_formatting.add(
-            new_range,
-            FormulaRule(
-                formula=[f'{first_data_col}{row_new}="最新になし"'],
-                stopIfTrue=True,
-                fill=fills["empty"],
-            ),
-        )
-        ws.conditional_formatting.add(
-            old_range,
-            FormulaRule(
-                formula=[f'{first_data_col}{row_old}="比較元になし"'],
-                stopIfTrue=True,
-                fill=fills["empty"],
-            ),
-        )
-
-        if m_row["source_key"] not in ext_rules["ignore_params"]:
             ws.conditional_formatting.add(
                 new_range,
                 FormulaRule(
-                    formula=[
-                        f'AND({first_data_col}{row_new}<>"",'
-                        f'{first_data_col}{row_new}<>{first_data_col}{row_old},'
-                        f'{first_data_col}{row_new}<>"最新になし")'
-                    ],
-                    fill=fills["diff"],
+                    formula=[f'{first_data_col}{row_new}="最新になし"'],
+                    stopIfTrue=True,
+                    fill=fills["empty"],
                 ),
             )
             ws.conditional_formatting.add(
                 old_range,
                 FormulaRule(
-                    formula=[
-                        f'AND({first_data_col}{row_old}<>"",'
-                        f'{first_data_col}{row_old}<>{first_data_col}{row_new},'
-                        f'{first_data_col}{row_old}<>"比較元になし")'
-                    ],
-                    fill=fills["diff"],
+                    formula=[f'{first_data_col}{row_old}="比較元になし"'],
+                    stopIfTrue=True,
+                    fill=fills["empty"],
                 ),
             )
 
+            if m_row["source_key"] not in ext_rules["ignore_params"]:
+                ws.conditional_formatting.add(
+                    new_range,
+                    FormulaRule(
+                        formula=[
+                            f'AND({first_data_col}{row_new}<>"",'
+                            f'{first_data_col}{row_new}<>{first_data_col}{row_old},'
+                            f'{first_data_col}{row_new}<>"最新になし")'
+                        ],
+                        fill=fills["diff"],
+                    ),
+                )
+                ws.conditional_formatting.add(
+                    old_range,
+                    FormulaRule(
+                        formula=[
+                            f'AND({first_data_col}{row_old}<>"",'
+                            f'{first_data_col}{row_old}<>{first_data_col}{row_new},'
+                            f'{first_data_col}{row_old}<>"比較元になし")'
+                        ],
+                        fill=fills["diff"],
+                    ),
+                )
+
     ws.row_dimensions.group(3, 2 + len(mapping_rows), hidden=False, outline_level=1)
-    ws.row_dimensions.group(OLD_START_ROW + 1, OLD_START_ROW + len(mapping_rows), hidden=False, outline_level=1)
+    if compare:
+        ws.row_dimensions.group(OLD_START_ROW + 1, OLD_START_ROW + len(mapping_rows), hidden=False, outline_level=1)
 
     for idx, m_row in enumerate(mapping_rows):
         row_new = m_row["row_idx"]
@@ -464,7 +470,7 @@ def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename
         for c_idx in range(total_output_cols):
             col_num = START_DATA_COL + c_idx
             v_new = str(ws.cell(row=row_new, column=col_num).value or "").strip()
-            v_old = str(ws.cell(row=row_old, column=col_num).value or "").strip()
+            v_old = str(ws.cell(row=row_old, column=col_num).value or "").strip() if compare else ""
             
             if (v_new and v_new not in ["最新になし", "比較元になし"]) or \
                (v_old and v_old not in ["最新になし", "比較元になし"]):
@@ -473,7 +479,8 @@ def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename
                 
         if is_empty_row:
             ws.row_dimensions[row_new].hidden = True
-            ws.row_dimensions[row_old].hidden = True
+            if compare:
+                ws.row_dimensions[row_old].hidden = True
 
     if url_row_idx:
         start_col_grp = START_DATA_COL
@@ -538,7 +545,8 @@ def generate_compare_report(
         return next((path for path in candidates if os.path.exists(path)), candidates[0])
 
     l_path = resolve_measurement_path(latest_json_path)
-    b_path = resolve_measurement_path(base_json_path)
+    compare = bool(base_json_path)
+    b_path = resolve_measurement_path(base_json_path) if compare else None
     output_dir = os.path.join(project_dir, "outputs")
     os.makedirs(output_dir, exist_ok=True)
     output_excel_path = os.path.join(output_dir, output_excel_name)
@@ -547,11 +555,13 @@ def generate_compare_report(
     
     if not os.path.exists(template_path): return logger_func(f"テンプレートが見つかりません: {template_path}")
     if not os.path.exists(l_path): return logger_func(f"最新の計測JSONが見つかりません: {l_path}")
-    if not os.path.exists(b_path): return logger_func(f"比較元の計測JSONが見つかりません: {b_path}")
+    if compare and not os.path.exists(b_path): return logger_func(f"比較元の計測JSONが見つかりません: {b_path}")
 
     try:
         with open(l_path, "r", encoding="utf-8") as f: latest_data = json.load(f)
-        with open(b_path, "r", encoding="utf-8") as f: base_data = json.load(f)
+        base_data = {}
+        if compare:
+            with open(b_path, "r", encoding="utf-8") as f: base_data = json.load(f)
     except json.JSONDecodeError:
         return logger_func("JSONファイルの読み込みに失敗しました。ファイルが壊れていないか確認してください。")
 
@@ -601,7 +611,7 @@ def generate_compare_report(
         replace_placeholders_in_sheet(wb["表紙"], config)
 
     for adapter, ev_new, ev_old in process_targets:
-        logger_func(f"シート『{adapter.sheet_name}』の比較処理を行っています。")
+        logger_func(f"シート『{adapter.sheet_name}』のレポートを作成しています。")
         process_single_sheet(
             ws=wb[adapter.sheet_name],
             sheet_name=adapter,
@@ -609,7 +619,8 @@ def generate_compare_report(
             ev_old=ev_old,
             config=config,
             latest_filename=os.path.basename(latest_json_path),
-            base_filename=os.path.basename(base_json_path)
+            base_filename=os.path.basename(base_json_path) if compare else "",
+            compare=compare
         )
 
     try:
@@ -618,7 +629,7 @@ def generate_compare_report(
         logger_func(f"【エラー】出力先のExcelファイル ({output_excel_name}) が開かれています。\nExcelを閉じてから再度実行してください。\n")
         return None
 
-    logger_func(f"比較レポートを生成しました。\n保存先: {output_excel_path}\n")
+    logger_func(f"レポートを生成しました。\n保存先: {output_excel_path}\n")
     return output_excel_path
 
 if __name__ == "__main__":
