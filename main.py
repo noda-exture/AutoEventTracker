@@ -10,9 +10,10 @@ from urllib.parse import urlsplit, urlunsplit
 
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QFileDialog
 from PySide6.QtCore import QFile, Signal, QThread
-from PySide6.QtGui import QTextCursor
+from PySide6.QtGui import QIcon, QTextCursor
 
 from excel_reporter import generate_compare_report
+from app_identity import configure_application_identity
 from display_parts import Ui_MainWindow
 from global_settings import load_global_config, resolve_device, load_recording_viewport, validate_recording_viewport
 from storage_paths import (
@@ -942,7 +943,10 @@ def load_stylesheet(app, qss_filename="styles.qss"):
             app.setStyleSheet(f.read())
 
 if __name__ == "__main__":
+    configure_application_identity()
     app = QApplication(sys.argv)
+    app.setWindowIcon(QIcon(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                        "assets", "autoeventtracker-icon-v2.png")))
     load_stylesheet(app, "styles.qss")
     window = AutoTrackerApp()
     window.show()
