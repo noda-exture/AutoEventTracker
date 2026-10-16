@@ -191,7 +191,7 @@ class Ui_MainWindow:
         self.tabs.setObjectName("workspaceTabs")
         self.tabs.setDocumentMode(True)
         self.tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.tabs.addTab(self._create_analysis_tab(), "計測データ比較")
+        self.tabs.addTab(self._create_analysis_tab(), "レポート生成")
         self.tabs.addTab(self._create_execution_tab(), "シナリオ実行")
         self.tabs.addTab(self._create_scenario_tab(), "シナリオ作成")
         operation_layout.addWidget(self.tabs)
@@ -225,12 +225,12 @@ class Ui_MainWindow:
         layout.setContentsMargins(20, 28, 20, 28)
 
         self.chk_compare = ToggleSwitch("比較")
-        self.chk_compare.setChecked(True)
+        self.chk_compare.setChecked(False)
         layout.addWidget(self.chk_compare)
 
         file1_group = QVBoxLayout()
         file1_group.setSpacing(7)
-        lbl_f1 = QLabel("最新の計測データ")
+        lbl_f1 = QLabel("計測データ")
         self.lbl_analysis_input = lbl_f1
         lbl_f1.setProperty("class", "bold-label")
         file1_group.addWidget(lbl_f1)
@@ -266,6 +266,7 @@ class Ui_MainWindow:
         file2_group.addLayout(row2)
         layout.addWidget(self.comparison_input)
         self.chk_compare.toggled.connect(self.comparison_input.setEnabled)
+        self.comparison_input.setEnabled(self.chk_compare.isChecked())
         self.chk_compare.toggled.connect(
             lambda enabled: self.lbl_analysis_input.setText("最新の計測データ" if enabled else "計測データ")
         )
@@ -332,7 +333,7 @@ class Ui_MainWindow:
         self.combo_scenario.setObjectName("scenarioCombo")
         exec_header.addWidget(self.combo_scenario, stretch=2)
 
-        self.chk_headless = ToggleSwitch("ブラウザを表示しない")
+        self.chk_headless = ToggleSwitch("ブラウザ非表示")
         self.chk_headless.setToolTip("ONにすると、ブラウザ画面を開かずに実行します")
         exec_header.addWidget(self.chk_headless, stretch=1)
         scenario_group.addLayout(exec_header)

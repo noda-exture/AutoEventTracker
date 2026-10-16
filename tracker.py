@@ -513,7 +513,7 @@ def click_first_actionable(locator, timeout_ms=15000, max_candidates=20):
                 continue
 
             try:
-                candidate.click(timeout=min(3000, remaining_ms))
+                candidate.click(timeout=min(10000, remaining_ms))
                 return
             except Exception as error:
                 last_error = error
@@ -897,6 +897,9 @@ def run_tracker(
                         
                     if action == "click":
                         click_first_actionable(target_loc, timeout_ms=action_timeout_ms)
+
+                    elif action == "hover":
+                        target_loc.hover(timeout=action_timeout_ms)
 
                     elif action == "change" or action == "select":
                         element_tag = target_loc.evaluate("el => el.tagName.toLowerCase()")
