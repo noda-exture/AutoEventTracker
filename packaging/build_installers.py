@@ -48,7 +48,8 @@ def main():
         for distribution in distributions():
             destination = licenses / 'python-packages' / distribution.metadata['Name']
             destination.mkdir(parents=True, exist_ok=True)
-            (destination / 'METADATA.txt').write_text(str(distribution.metadata), encoding='utf-8')
+            metadata = distribution.read_text('METADATA') or distribution.read_text('PKG-INFO') or ''
+            (destination / 'METADATA.txt').write_text(metadata, encoding='utf-8')
             for file in distribution.files or ():
                 if any(word in file.name.lower() for word in ('license', 'copying', 'notice')):
                     source = Path(distribution.locate_file(file))
