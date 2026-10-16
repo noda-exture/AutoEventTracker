@@ -977,7 +977,7 @@ def run_tracker(
 
     return success
 
-if __name__ == "__main__":
+def cli_main():
     parser = argparse.ArgumentParser(description="シナリオを実行して計測通信を記録します。")
     parser.add_argument("project", help="プロジェクト名")
     parser.add_argument("scenario", help="シナリオJSONファイル名")
@@ -995,4 +995,8 @@ if __name__ == "__main__":
         start_url_override=args.start_url,
         device=args.device,
     )
-    sys.exit(0 if succeeded else 1)
+    return 0 if succeeded else 1
+
+
+if __name__ == "__main__":
+    sys.exit(cli_main())

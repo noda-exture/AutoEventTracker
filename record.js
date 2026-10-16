@@ -95,7 +95,7 @@ const flushClosedPages = () => {
       .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
       .replace(/^\.+|\.+$/g, '') || 'scenario';
     const safeFileName = `${scenarioName}.json`;
-    const scenarioDir = path.join(__dirname, 'project', proj, 'scenario', scenarioName);
+    const scenarioDir = path.join(process.env.AET_DATA_DIR || __dirname, 'project', proj, 'scenario', scenarioName);
     if (!fs.existsSync(scenarioDir)) {
       fs.mkdirSync(scenarioDir, { recursive: true });
     }

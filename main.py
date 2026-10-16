@@ -14,6 +14,7 @@ from PySide6.QtGui import QIcon, QTextCursor
 
 from excel_reporter import generate_compare_report
 from app_identity import configure_application_identity
+from runtime_paths import initialize_runtime, resource_path, tracker_command, recorder_command, child_process_options
 from display_parts import Ui_MainWindow
 from global_settings import load_global_config, resolve_device, load_recording_viewport, validate_recording_viewport
 from storage_paths import (
@@ -181,7 +182,7 @@ class ScenarioWorker(QThread):
 
     def run(self):
         try:
-            cmd = [sys.executable, "tracker.py", self.proj, self.scenario_file]
+            cmd = tracker_command() + [self.proj, self.scenario_file]
             if self.headless:
                 cmd.append("--headless")
             if self.device is not None:
@@ -197,7 +198,8 @@ class ScenarioWorker(QThread):
                 stderr=subprocess.STDOUT,
                 text=True,
                 encoding='utf-8',
-                bufsize=1
+                bufsize=1,
+                **child_process_options(),
             )
             for line in iter(process.stdout.readline, ''):
                 if line:
@@ -225,13 +227,14 @@ class AutoRecordWorker(QThread):
         try:
             viewport = validate_recording_viewport(self.viewport) if self.viewport is not None else load_recording_viewport()
             process = subprocess.Popen(
-                ["node", "record.js", self.proj, self.filename, self.start_url, self.memo,
+                recorder_command() + [self.proj, self.filename, self.start_url, self.memo,
                  str(viewport['width']), str(viewport['height'])],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 encoding='utf-8',
-                bufsize=1
+                bufsize=1,
+                **child_process_options(),
             )
             for line in iter(process.stdout.readline, ''):
                 if line:
@@ -942,12 +945,17 @@ def load_stylesheet(app, qss_filename="styles.qss"):
         with open(qss_filename, "r", encoding="utf-8") as f:
             app.setStyleSheet(f.read())
 
-if __name__ == "__main__":
+def run_gui():
+    initialize_runtime()
     configure_application_identity()
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                         "assets", "autoeventtracker-icon-v2.png")))
-    load_stylesheet(app, "styles.qss")
+    load_stylesheet(app, str(resource_path("styles.qss")))
     window = AutoTrackerApp()
     window.show()
-    sys.exit(app.exec())
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(run_gui())

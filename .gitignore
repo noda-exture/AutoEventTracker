@@ -3,3 +3,11 @@ node_modules/
 
 # project フォルダ内のサブフォルダ（各案件フォルダ）のみを除外
 project/*/
+
+# Local build environments and generated installers
+.venv-build/
+build/
+dist/
+installers/
+__pycache__/
+*.pyc

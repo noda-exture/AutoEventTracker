@@ -1,0 +1,6 @@
+PySide6==6.10.3
+playwright==1.60.0
+openpyxl==3.1.5
+tzdata==2026.1
+pyinstaller==6.22.3
+Pillow==11.3.0

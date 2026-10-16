@@ -4,9 +4,10 @@ import json
 import math
 from copy import deepcopy
 from pathlib import Path
+from runtime_paths import global_config_path
 
 
-GLOBAL_CONFIG_PATH = Path(__file__).resolve().with_name('global_config.json')
+GLOBAL_CONFIG_PATH = global_config_path()
 DEVICE_OPTIONS = ('user_agent', 'viewport', 'screen', 'device_scale_factor', 'is_mobile', 'has_touch')
 
 

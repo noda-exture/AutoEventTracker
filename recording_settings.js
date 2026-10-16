@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-function resolveRecordingViewport(width, height, configPath = path.join(__dirname, 'global_config.json')) {
+function resolveRecordingViewport(width, height, configPath = process.env.AET_GLOBAL_CONFIG || path.join(__dirname, 'global_config.json')) {
   let viewport;
   if (width !== undefined || height !== undefined) {
     if (!/^\d+$/.test(width || '') || !/^\d+$/.test(height || '')) {
