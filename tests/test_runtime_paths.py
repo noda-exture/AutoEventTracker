@@ -39,8 +39,8 @@ class RuntimePathsTests(unittest.TestCase):
              patch('runtime_paths.sys.executable', '/apps/AutoEventTracker'), \
              patch('runtime_paths.sys.platform', 'darwin'), \
              patch('runtime_paths.resource_path', side_effect=lambda *parts: Path('/resources').joinpath(*parts)):
-            self.assertEqual(runtime_paths.tracker_command(), ['/apps/AutoEventTrackerWorker', '--run-tracker'])
-            self.assertEqual(runtime_paths.recorder_command(), ['/resources/playwright/driver/node', '/resources/record.js'])
+            self.assertEqual(runtime_paths.tracker_command(), [str(Path('/apps/AutoEventTrackerWorker')), '--run-tracker'])
+            self.assertEqual(runtime_paths.recorder_command(), [str(Path('/resources/playwright/driver/node')), str(Path('/resources/record.js'))])
 
     def test_windows_commands_use_executable_suffix(self):
         with patch('runtime_paths.is_bundled', return_value=True), \

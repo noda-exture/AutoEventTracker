@@ -1,0 +1,25 @@
+AutoEventTracker includes unmodified third-party runtime components.
+
+Python 3.11: Python Software Foundation License, see licenses/Python-LICENSE.txt.
+Source: https://www.python.org/downloads/source/
+
+Qt 6.10.3, PySide6 6.10.3 and Shiboken6 6.10.3 are dynamically linked
+under the GNU Lesser General Public License version 3. The complete LGPL
+and referenced GPL are supplied in licenses/. These libraries remain
+separate, replaceable files in the application bundle. Their corresponding
+source is available from the Qt project:
+https://download.qt.io/archive/qt/6.10/6.10.3/single/
+https://code.qt.io/cgit/pyside/pyside-setup.git/tag/?h=v6.10.3
+
+Playwright 1.60.0 (Python) / 1.61.1 (Node.js): Apache License 2.0.
+Playwright includes Node.js and its third-party license notices in
+playwright/driver/LICENSE and playwright/driver/package/ThirdPartyNotices.txt.
+Chromium and its third-party notices are included in browsers/.
+
+The recorder's npm dependencies retain their original license and notice
+files under node_modules/. Installed Python package metadata and available
+license files are included under licenses/python-packages/.
+
+PyInstaller builds the launcher with its distribution exception; it does
+not impose its GPL license on the bundled application.
+https://pyinstaller.org/en/stable/license.html

@@ -35,6 +35,11 @@ def global_config_path():
 
 
 def initialize_runtime():
+    # Frozen console workers do not always honor PYTHONIOENCODING. Their GUI
+    # parent decodes the pipe as UTF-8, including on non-Japanese Windows.
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
     root = data_directory()
     root.mkdir(parents=True, exist_ok=True)
     if is_bundled():

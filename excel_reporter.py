@@ -42,7 +42,8 @@ def load_project_config(project_dir):
     return default_config
 
 def replace_placeholders_in_sheet(ws, config):
-    today_str = datetime.now().strftime("%Y年%m月%d日")
+    today = datetime.now()
+    today_str = f"{today:%Y}年{today:%m}月{today:%d}日"
     placeholders = {
         "{client_name}": config.get("client_name", ""),
         "{task_name}": config.get("task_name", ""),

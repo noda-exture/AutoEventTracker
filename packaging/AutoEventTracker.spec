@@ -12,6 +12,8 @@ resources += [
     (str(root / 'assets' / 'autoeventtracker-icon-v2.png'), 'assets'),
     (str(root / 'node_modules'), 'node_modules'),
     (str(stage / 'defaults'), 'defaults'),
+    (str(stage / 'licenses'), 'licenses'),
+    (str(root / 'packaging' / 'THIRD_PARTY_NOTICES.txt'), '.'),
     (str(root / 'packaging' / 'recorder-smoke.cjs'), '.'),
     (str(root / 'packaging' / 'recorder-smoke-preload.cjs'), '.'),
 ]

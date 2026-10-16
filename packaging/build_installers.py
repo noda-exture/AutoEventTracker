@@ -1,6 +1,7 @@
 """Build a native, self-contained installer on macOS or Windows."""
 import argparse
 import hashlib
+from importlib.metadata import distributions
 import json
 import os
 from pathlib import Path
@@ -42,6 +43,18 @@ def main():
         sys.path.insert(0, str(ROOT))
         from create_template import create_comprehensive_template
         create_comprehensive_template(str(defaults / 'template.xlsx'))
+        licenses = stage / 'licenses'
+        shutil.copytree(ROOT / 'packaging' / 'licenses', licenses, dirs_exist_ok=True)
+        for distribution in distributions():
+            destination = licenses / 'python-packages' / distribution.metadata['Name']
+            destination.mkdir(parents=True, exist_ok=True)
+            (destination / 'METADATA.txt').write_text(str(distribution.metadata), encoding='utf-8')
+            for file in distribution.files or ():
+                if any(word in file.name.lower() for word in ('license', 'copying', 'notice')):
+                    source = Path(distribution.locate_file(file))
+                    if source.is_file():
+                        target = destination / str(file).replace('/', '_').replace('\\', '_')
+                        shutil.copy2(source, target)
         # Install only Chromium (headed and headless). The recorder and tracker
         # currently use different Playwright revisions, so include both.
         env = {**os.environ, 'PLAYWRIGHT_BROWSERS_PATH': str(browsers), 'PLAYWRIGHT_SKIP_BROWSER_GC': '1'}
