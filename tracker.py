@@ -235,6 +235,47 @@ def scroll_page(page, value, target_locator=None):
     page.evaluate("amount => window.scrollBy(0, amount)", amount)
 
 
+def hover_first_exposed_point(locator, timeout_ms=15000):
+    """Hover a hit-testable point instead of an obscured element center."""
+    locator.scroll_into_view_if_needed(timeout=timeout_ms)
+    position = locator.evaluate("""
+        el => {
+            const rect = el.getBoundingClientRect();
+            const doc = el.ownerDocument;
+            const win = doc.defaultView;
+            const left = Math.max(0, rect.left), top = Math.max(0, rect.top);
+            const right = Math.min(win.innerWidth, rect.right);
+            const bottom = Math.min(win.innerHeight, rect.bottom);
+            if (right <= left || bottom <= top) return null;
+            const fractions = [0.5, 0.1, 0.9, 0.02, 0.98, 0.25, 0.75];
+            for (const fy of fractions) {
+                for (const fx of fractions) {
+                    const x = left + (right - left) * fx;
+                    const y = top + (bottom - top) * fy;
+                    let hit = doc.elementFromPoint(x, y);
+                    while (hit?.shadowRoot) {
+                        const inner = hit.shadowRoot.elementFromPoint(x, y);
+                        if (!inner || inner === hit) break;
+                        hit = inner;
+                    }
+                    if (hit === el || el.contains(hit)) {
+                        // Playwright positions are relative to the padding box.
+                        return {x: x - rect.left - el.clientLeft,
+                                y: y - rect.top - el.clientTop};
+                    }
+                }
+            }
+            return null;
+        }
+    """)
+    if position is None:
+        # Preserve Playwright's waiting and error behavior for fully covered
+        # targets. Never force hover through an overlay or skip the step.
+        locator.hover(timeout=timeout_ms)
+    else:
+        locator.hover(position=position, timeout=timeout_ms)
+
+
 def select_value(locator, value, timeout_ms=15000):
     """Select and verify an option value."""
     expected = str(value)
@@ -391,6 +432,23 @@ def _tracking_tolerant_href_candidate(scope, selector, max_candidates=500):
     return None
 
 
+def scenario_locator(scope, selector):
+    """Accept a literal colon-containing ID only when CSS parsing fails."""
+    locator = scope.locator(selector)
+    try:
+        locator.count()
+    except Exception:
+        # Legacy/manual scenarios can contain JSF IDs such as #form:field.
+        # Keep valid CSS (including pseudo-classes and escaped IDs) untouched.
+        if not re.fullmatch(r"#[\w-]+(?::[\w-]+)+", selector):
+            raise
+        fallback = scope.locator(f'[id="{selector[1:]}"]')
+        if not fallback.count():
+            raise
+        return fallback
+    return locator
+
+
 def wait_for_actionable_locator(page, selector, timeout_ms=30000, scroll_step_px=600, max_candidates=20):
     """Find an actionable target across frames and scroll surfaces in both directions."""
     deadline = time.monotonic() + timeout_ms / 1000
@@ -401,23 +459,23 @@ def wait_for_actionable_locator(page, selector, timeout_ms=30000, scroll_step_px
     while time.monotonic() < deadline:
         for scope in _locator_scopes(page):
             try:
-                locator = scope.locator(selector)
+                locator = scenario_locator(scope, selector)
                 candidate_count = locator.count()
             except Exception:
                 continue
             for index in range(min(candidate_count, max_candidates)):
                 candidate = locator.nth(index)
                 try:
-                    if candidate.is_visible() and candidate.is_enabled():
-                        scroll_into_view = getattr(candidate, "scroll_into_view_if_needed", None)
-                        if callable(scroll_into_view):
-                            scroll_into_view(timeout=2000)
-                        return candidate
-
-                    details = candidate.evaluate(
+                    if not candidate.is_enabled():
+                        continue
+                    evaluate = getattr(candidate, "evaluate", None)
+                    details = evaluate(
                         "el => ({ tag: el.tagName.toLowerCase(), type: el.type || '', id: el.id || '' })"
-                    )
-                    if details["tag"] == "input" and details["type"] in ("radio", "checkbox") and details["id"]:
+                    ) if callable(evaluate) else {}
+                    # Styled radios can have a visible bounding box while their
+                    # label receives pointer events. Prefer the associated label
+                    # even when Playwright considers the input visible.
+                    if details.get("tag") == "input" and details["type"] in ("radio", "checkbox") and details["id"]:
                         escaped_id = details["id"].replace("\\", "\\\\").replace('"', '\\"')
                         labels = scope.locator(f'label[for="{escaped_id}"]')
                         for label_index in range(min(labels.count(), max_candidates)):
@@ -427,6 +485,11 @@ def wait_for_actionable_locator(page, selector, timeout_ms=30000, scroll_step_px
                                 if callable(scroll_into_view):
                                     scroll_into_view(timeout=2000)
                                 return label
+                    if candidate.is_visible():
+                        scroll_into_view = getattr(candidate, "scroll_into_view_if_needed", None)
+                        if callable(scroll_into_view):
+                            scroll_into_view(timeout=2000)
+                        return candidate
                 except Exception:
                     continue
 
@@ -869,7 +932,7 @@ def run_tracker(
                     if selector:
                         try:
                             if action == "wait_for" and step.get("state", "visible") != "visible":
-                                target_loc = page.locator(selector).first
+                                target_loc = scenario_locator(page, selector).first
                                 target_loc.wait_for(
                                     state=step.get("state", "attached"),
                                     timeout=int(step.get("timeout_ms", element_timeout_ms)),
@@ -899,7 +962,7 @@ def run_tracker(
                         click_first_actionable(target_loc, timeout_ms=action_timeout_ms)
 
                     elif action == "hover":
-                        target_loc.hover(timeout=action_timeout_ms)
+                        hover_first_exposed_point(target_loc, timeout_ms=action_timeout_ms)
 
                     elif action == "change" or action == "select":
                         element_tag = target_loc.evaluate("el => el.tagName.toLowerCase()")

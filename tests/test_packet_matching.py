@@ -22,6 +22,7 @@ from tracker import (
     prepare_steps,
     resolve_execution_url,
     scroll_page,
+    scenario_locator,
     select_value,
     wait_for_actionable_locator,
 )
@@ -443,6 +444,74 @@ class PacketMatchingTests(unittest.TestCase):
         select_value(locator, "R08")
 
         self.assertEqual(locator.value, "R08")
+
+    def test_visible_styled_radio_prefers_its_label(self):
+        class Candidate:
+            def is_visible(self): return True
+            def is_enabled(self): return True
+            def evaluate(self, expression):
+                return {"tag": "input", "type": "radio", "id": "lstBautmke10"}
+
+        radio = Candidate()
+        label = Candidate()
+
+        class Locator:
+            def __init__(self, items): self.items = items
+            def count(self): return len(self.items)
+            def nth(self, index): return self.items[index]
+
+        class Page:
+            def __init__(self, labels): self.labels = labels
+            def locator(self, selector):
+                if selector == 'label[for="lstBautmke10"]':
+                    return Locator(self.labels)
+                return Locator([radio])
+
+        self.assertIs(
+            wait_for_actionable_locator(Page([label]), '[id="lstBautmke10"]'), label
+        )
+        self.assertIs(
+            wait_for_actionable_locator(Page([]), '[id="lstBautmke10"]'), radio
+        )
+
+    def test_invalid_colon_id_selector_uses_literal_id(self):
+        class Locator:
+            def __init__(self, selector): self.selector = selector
+            def count(self):
+                if self.selector == "#contentsform:selCcdategy":
+                    raise ValueError("Unknown pseudo-class")
+                return 1
+
+        class Scope:
+            def locator(self, selector): return Locator(selector)
+
+        locator = scenario_locator(Scope(), "#contentsform:selCcdategy")
+        self.assertEqual(locator.selector, '[id="contentsform:selCcdategy"]')
+
+    def test_valid_pseudo_class_selector_is_not_reinterpreted_as_id(self):
+        class Locator:
+            def __init__(self, selector): self.selector = selector
+            def count(self): return 0
+
+        class Scope:
+            def locator(self, selector): return Locator(selector)
+
+        locator = scenario_locator(Scope(), "#field:disabled")
+        self.assertEqual(locator.selector, "#field:disabled")
+
+    def test_invalid_colon_selector_without_matching_id_keeps_error(self):
+        class Locator:
+            def __init__(self, selector): self.selector = selector
+            def count(self):
+                if self.selector.startswith("#"):
+                    raise ValueError("Unknown pseudo-class")
+                return 0
+
+        class Scope:
+            def locator(self, selector): return Locator(selector)
+
+        with self.assertRaisesRegex(ValueError, "Unknown pseudo-class"):
+            scenario_locator(Scope(), "#contentsform:missing")
 
     def test_fill_value_verifies_text_and_moves_focus(self):
         class Locator:
