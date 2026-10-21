@@ -116,7 +116,7 @@ def create_comprehensive_template(template_path=None):
                         f"data.__adobe.analytics.eVar{i}", f"eVar{i}", "カスタムコンバージョン変数。意味は案件で設定"))
 
     ws_aa.merge_cells("A1:E1")
-    ws_aa['A1'] = "Adobe公式のWeb計測項目。各方式の送信値を比較します。空欄の対応・案件別設定は表紙を参照。"
+    ws_aa['A1'] = "Adobe公式のWeb計測項目。各方式の送信値を比較します。"
     ws_aa['A1'].font = body_font
     ws_aa.freeze_panes = "A3"
     ws_aa.row_dimensions[2].height = 25
@@ -270,7 +270,7 @@ def create_comprehensive_template(template_path=None):
 
     # サイト独自のep./epn./up./upn.は初期定義に含めない。
     # 利用者が案件別template.xlsxのGA4末尾に実際の送信キーを追加する。
-    ws_ga4.cell(row=1, column=1, value="汎用Web GA4。サイト別項目の追加方法は表紙を参照。未送信項目は空欄。")
+    ws_ga4.cell(row=1, column=1, value="汎用Web GA4。未送信項目は空欄。")
     ws_ga4.merge_cells("A1:E1")
     ws_ga4['A1'].font = body_font
     ws_ga4.freeze_panes = "A3"
@@ -305,47 +305,6 @@ def create_comprehensive_template(template_path=None):
     ws_ga4.column_dimensions['D'].width = 32
     ws_ga4.column_dimensions['E'].width = 65
 
-    ga4_notes = [
-        "GA4テンプレートの使い方",
-        "対象はWebの /g/collect 通信。基本項目、標準イベント項目、商品データを定義しています。",
-        "送信項目はイベント・同意状態・実装により異なります。すべての行が送信必須という意味ではありません。",
-        "案件別template.xlsxのGA4シート末尾に行を追加し、A～E列を既存行と同じ形式で記入してください。",
-        "A列には実際の送信キーを記入します。ep.は文字列イベント項目、epn.は数値イベント項目です。",
-        "ユーザープロパティはup.が文字列、upn.が数値です。GA4画面の表示名ではなく送信キーを指定してください。",
-        "サイト独自のカスタム項目は初期定義に含めていません。標準項目でもep.で送られるものがあります。",
-        "pr1～pr200は商品ごとの送信文字列を比較します。商品ID・価格などの個別展開は行いません。",
-        "数値項目のepn.とep.は別行です。実際に送信された型の行に値が入ります。不要な行は削除できます。",
-        "内部パラメータは変更される場合があります。未定義キーは案件ごとに追加してください。",
-        "標準イベント: https://developers.google.com/analytics/devguides/collection/ga4/reference/events",
-        "拡張計測: https://support.google.com/analytics/answer/9216061",
-    ]
-    for row, note in enumerate(ga4_notes, 8):
-        ws_top.merge_cells(start_row=row, start_column=2, end_row=row, end_column=10)
-        ws_top.cell(row=row, column=2, value=note).font = body_font
-        ws_top.cell(row=row, column=2).alignment = Alignment(wrap_text=True, vertical="center")
-        ws_top.row_dimensions[row].height = 42
-
-    aa_notes = [
-        "Adobe Analyticsテンプレートの使い方",
-        "A列はAppMeasurementのクエリキー、B列はxdm内のパス、C列はdataから始まるパスです。",
-        "直接対応する値がない列は空欄です。未送信は欠落とは限りません。ヘッダー・URLパス内の情報は別途確認してください。",
-        "リンク種別・エラーページ・商品情報は方式間で形式が異なります。値の正規化やAdobe側の集計は再現しません。",
-        "prop1～75、eVar1～250、list1～3は設定用の枠です。各サイトの設計に合わせて項目名・説明を記入してください。",
-        "独自XDMを使用する場合はB列を実際のパスに変更してください。初期値はAdobe公式のAnalytics用XDMです。",
-        "XDMのカスタムイベントは案件ごとに行を追加します。例: _experience.analytics.event1to100.event1.value",
-        "events一覧、XDM eventType、XDMコマース指標は別行で確認します。商品文字列とXDM商品配列も別行です。",
-        "AppMeasurementのコンテキストデータは送信形式が階層化されます。任意のキーを追加する前に保存データを確認してください。",
-        "DataとXDMが両方ある場合はDataを優先します。Dataの標準名と短縮名の同時指定は避けてください。",
-        "Adobe送信キー: https://experienceleague.adobe.com/en/docs/analytics/implementation/validate/query-parameters",
-        "Adobe XDM対応: https://experienceleague.adobe.com/en/docs/analytics/implementation/aep-edge/xdm-var-mapping",
-        "Adobe Data対応: https://experienceleague.adobe.com/en/docs/analytics/implementation/aep-edge/data-var-mapping",
-    ]
-    for row, note in enumerate(aa_notes, 22):
-        ws_top.merge_cells(start_row=row, start_column=2, end_row=row, end_column=10)
-        ws_top.cell(row=row, column=2, value=note).font = body_font
-        ws_top.cell(row=row, column=2).alignment = Alignment(wrap_text=True, vertical="center")
-        ws_top.row_dimensions[row].height = 48
-    
     wb.save(template_path)
     print(f"汎用マスターテンプレートを生成しました: {template_path}")
     return template_path
