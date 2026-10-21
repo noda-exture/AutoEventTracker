@@ -163,3 +163,59 @@ test('retains a quick hover that opens an aria-controls menu outside the trigger
     assert.equal(await replay.evaluate(() => window.chosen), true);
   } finally { await browser.close(); }
 });
+
+test('records one login click without a repeated fill on blur', async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const events = [];
+    const context = await browser.newContext();
+    await context.exposeBinding('notifyNodeEvent', (_, event) => events.push(event));
+    await context.addInitScript(installRecorderEvents);
+    const page = await context.newPage();
+    await page.goto('data:text/html,' + encodeURIComponent('<input id="password" type="password"><button id="login">Login</button>'));
+    await page.locator('#password').fill('fixture-value');
+    await page.locator('#login').click();
+    await page.waitForTimeout(100);
+    assert.equal(events.filter(e => e.action === 'fill').length, 1);
+    assert.equal(events.filter(e => e.action === 'click').length, 1);
+    assert.deepEqual(events.filter(e => ['fill', 'click'].includes(e.action)).map(e => e.action), ['fill', 'click']);
+    await page.locator('#login').press('Enter');
+    await page.waitForTimeout(100);
+    assert.equal(events.filter(e => e.action === 'click').length, 2);
+    await context.close();
+  } finally { await browser.close(); }
+});
+
+test('does not record site-generated hidden radio clicks', async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const events = [];
+    const context = await browser.newContext();
+    await context.exposeBinding('notifyNodeEvent', (_, event) => events.push(event));
+    await context.addInitScript(installRecorderEvents);
+    const page = await context.newPage();
+    await page.goto('data:text/html,' + encodeURIComponent('<input id="plan" type="radio" style="visibility:hidden"><button id="user">User</button>'));
+    await page.evaluate(() => document.getElementById('plan').click());
+    await page.locator('#user').click();
+    await page.waitForTimeout(100);
+    assert.deepEqual(events.filter(e => e.action === 'click').map(e => e.selector), ['[id="user"]']);
+    await context.close();
+  } finally { await browser.close(); }
+});
+
+test('records native label radio selection once and keyboard checkbox activation', async () => {
+  const browser = await chromium.launch({headless:true});
+  try {
+    const events=[];
+    const context=await browser.newContext();
+    await context.exposeBinding('notifyNodeEvent',(_,e)=>events.push(e));
+    await context.addInitScript(installRecorderEvents);
+    const page=await context.newPage();
+    await page.goto('data:text/html,'+encodeURIComponent('<input type="radio" id="radio"><label for="radio">Choose</label><input type="checkbox" id="check">'));
+    await page.locator('label').click();
+    await page.locator('#check').press('Space');
+    await page.waitForTimeout(100);
+    assert.deepEqual(events.filter(e=>e.action==='click').map(e=>e.selector),['[id="radio"]','[id="check"]']);
+    await context.close();
+  } finally {await browser.close();}
+});

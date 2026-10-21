@@ -7,8 +7,11 @@ import argparse
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 from playwright.sync_api import sync_playwright
 
+from hover_recovery import recover_hover
+
 from storage_paths import measurement_output_path, safe_file_component
 from global_settings import resolve_device, device_context_options
+from measurement_adapters.adobe_analytics import legacy_request_data
 
 def _safe_step_token(value):
     token = re.sub(r"[^\w-]+", "_", str(value or ""), flags=re.UNICODE).strip("_")
@@ -671,6 +674,7 @@ def run_tracker(
         print(f"\nシナリオ実行（{attempt + 1}/{max_retries}回目） ───")
         
         analytics_logs = []
+        step_results = []
         initial_capture_state = {
             "step_index": -1,
             "step_id": "initial_load",
@@ -743,16 +747,10 @@ def run_tracker(
 
             # ② 従来型 Adobe Analytics の通信を検知
             elif "/b/ss/" in url or ".2o7.net" in url or ".sc.omtrdc.net" in url:
-                parsed_url = urlparse(url)
-                params = parse_qs(parsed_url.query)
-                
-                log_entry = {
-                    "type": "Adobe Analytics (Legacy)",
-                    "method": method,
-                    "url": url,
-                    "params": {k: v[0] for k, v in params.items()},
-                    "timestamp": time.time()
-                }
+                log_entry = legacy_request_data(
+                    url, method, request.post_data if method == "POST" else None
+                )
+                log_entry["timestamp"] = time.time()
                 append_analytics_log(log_entry, source_page_id)
                 print("    [Adobe Analytics 検知] ビーコンが送信されました")
 
@@ -928,6 +926,43 @@ def run_tracker(
                         print(f"      操作対象を [{target_page_id}] タブに自動切り替えしました。")
                     runtime_state["active_page_id"] = target_page_id
 
+                    result = {"step_id": step["step_id"], "step_number": i + 1,
+                              "action": action, "selector": selector, "status": "completed"}
+                    step_results.append(result)
+                    if action == "hover":
+                        def attempt_hover():
+                            loc = wait_for_actionable_locator(
+                                page, selector, timeout_ms=2000, scroll_step_px=scroll_step_px)
+                            hover_first_exposed_point(loc, timeout_ms=2000)
+
+                        def next_ready():
+                            for following in combined_steps[i + 1:]:
+                                next_action = following["action"]
+                                if next_action in ("hover", "wait"):
+                                    continue
+                                next_id = following.get("page_id") or target_page_id
+                                if next_action == "switch_window":
+                                    return registry.get_live(following.get("value") or next_id) is not None
+                                next_page = registry.get_live(next_id)
+                                if next_page is None or not following.get("selector"):
+                                    return False
+                                # Trial checks visibility, stability and interception without clicking.
+                                try:
+                                    candidate = wait_for_actionable_locator(
+                                        next_page, following["selector"], timeout_ms=1000,
+                                        scroll_step_px=scroll_step_px)
+                                    candidate.click(trial=True, timeout=1000)
+                                    return True
+                                except Exception:
+                                    return False
+                            return True  # No remaining dependent action; still report unconfirmed.
+
+                        result["status"] = recover_hover(attempt_hover, next_ready)
+                        if result["status"] != "completed":
+                            print(f"      [警告] Step {i + 1}: マウスオーバーは未確認です（{result['status']}）。計測成功とは扱いません。")
+                        wait_for_analytics_quiet(page, step_capture_state)
+                        continue
+
                     target_loc = None
                     if selector:
                         try:
@@ -1001,6 +1036,8 @@ def run_tracker(
 
             if not step_error_occurred:
                 output_data = {
+                    "execution_status": "partial" if any(r["status"] != "completed" for r in step_results) else "completed",
+                    "step_results": step_results,
                     "schema_version": 2,
                     "project": project_name,
                     "scenario": config_filename,
@@ -1023,7 +1060,7 @@ def run_tracker(
                 with open(output_path, "w", encoding="utf-8") as f:
                     json.dump(output_data, f, ensure_ascii=False, indent=2)
                     
-                print("\nすべての工程が成功しました。")
+                print("\n" + {"completed": "すべての工程が成功しました。", "partial": "一部操作を確認できずに完了しました。実行結果を確認してください。", "failed": "実行を停止しました。途中までの計測データを保存しました。"}[output_data["execution_status"]])
                 print(f"計測データを保存しました: {output_path}\n")
                 
                 success = True

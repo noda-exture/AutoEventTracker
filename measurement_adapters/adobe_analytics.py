@@ -4,6 +4,29 @@ import urllib.parse
 from .base import MeasurementAdapter
 
 
+def collect_legacy_params(packet):
+    """Merge query and form body for display; retain repeated and blank values."""
+    if packet.get('type') == 'AEP Web SDK' or 'xdm_payload' in packet:
+        return dict(packet.get('params', {}))
+    def parse(value):
+        return {key: values[0] if len(values) == 1 else values
+                for key, values in urllib.parse.parse_qs(value, keep_blank_values=True).items()}
+
+    params = parse(urllib.parse.urlsplit(packet.get('url', '')).query)
+    params.update(packet.get('params', {}))
+    body = packet.get('post_data')
+    if isinstance(body, str):
+        params.update(parse(body))
+    return params
+
+
+def legacy_request_data(url, method, post_data=None):
+    packet = {'type': 'Adobe Analytics (Legacy)', 'url': url, 'method': method,
+              'post_data': post_data if method == 'POST' else None}
+    packet['params'] = collect_legacy_params(packet)
+    return packet
+
+
 def get_nested_value(data, path, separator="."):
     if not data or not isinstance(data, dict):
         return None
@@ -56,6 +79,36 @@ def first_xdm_event(packet):
     return events[0] if events and isinstance(events[0], dict) else {}
 
 
+def analytics_events_for_display(event):
+    """Render XDM custom events as an Analytics events string without changing raw data."""
+    data = get_nested_value(event, "data.__adobe.analytics")
+    if isinstance(data, dict) and "events" in data:
+        # Adobe's data.events overrides XDM events, including an explicit empty string.
+        return data["events"]
+    analytics = get_nested_value(event, "xdm._experience.analytics")
+    if not isinstance(analytics, dict):
+        return None
+    found = []
+    for group, events in analytics.items():
+        if not re.fullmatch(r"event\d+to\d+", group) or not isinstance(events, dict):
+            continue
+        for name, measure in events.items():
+            match = re.fullmatch(r"event(\d+)", name)
+            if not match or not isinstance(measure, dict):
+                continue
+            value = measure.get("value")
+            serial_id = measure.get("id")
+            if value is None and serial_id is None:
+                continue
+            token = name
+            if value is not None and value != 1:
+                token += f"={value}"
+            if serial_id is not None and str(serial_id) != "":
+                token += f":{serial_id}"
+            found.append((int(match.group(1)), token))
+    return ",".join(token for _, token in sorted(found)) if found else None
+
+
 class AdobeAnalyticsAdapter(MeasurementAdapter):
     key = "AA"
     sheet_name = "Adobe Analytics"
@@ -74,6 +127,12 @@ class AdobeAnalyticsAdapter(MeasurementAdapter):
                 if row['source_key']:
                     covered.add('data.__adobe.analytics.' + row['source_key'])
         found = {}
+        if "events" not in known_keys and any(
+            analytics_events_for_display(first_xdm_event(packet)) is not None for packet in packets
+        ):
+            found['events'] = dict(source_key='events', primary_path='',
+                                  secondary_path='data.__adobe.analytics.events', label='Events',
+                                  description='Web SDKのXDMカスタムイベントをevents形式で表示（Data指定優先）')
 
         def walk(value, parts):
             path = '.'.join(parts)
@@ -93,7 +152,7 @@ class AdobeAnalyticsAdapter(MeasurementAdapter):
                                    description='テンプレート未定義の送信項目（自動追加）')
 
         for packet in packets:
-            for key in packet.get('params', {}):
+            for key in collect_legacy_params(packet):
                 if key not in known_keys:
                     found['params:' + key] = dict(source_key=key, primary_path='', secondary_path='',
                                                  label=key, description='テンプレート未定義の送信項目（自動追加）')
@@ -121,10 +180,14 @@ class AdobeAnalyticsAdapter(MeasurementAdapter):
         secondary_path = mapping.get("secondary_path", mapping.get("data_path", ""))
         label = mapping.get("label", mapping.get("tool_name", ""))
 
-        events = packet.get("xdm_payload", {}).get("events", [])
+        payload = packet.get("xdm_payload")
+        events = payload.get("events", []) if isinstance(payload, dict) else []
         if events:
             first_event = events[0]
             analytics_data = first_event.get("data", {}).get("__adobe", {}).get("analytics", {})
+
+            if source_key == "events" or (not source_key and label.lower() == "events"):
+                return analytics_events_for_display(first_event)
 
             if secondary_path:
                 value = get_nested_value(first_event, secondary_path)
@@ -157,7 +220,7 @@ class AdobeAnalyticsAdapter(MeasurementAdapter):
             if check_key == "events":
                 return analytics_data.get("events")
 
-        params = packet.get("params", {})
+        params = collect_legacy_params(packet)
         if source_key and source_key in params:
             return params[source_key]
         return None
@@ -182,7 +245,7 @@ class AdobeAnalyticsAdapter(MeasurementAdapter):
                 "events": normalize_events(analytics.get("events")),
             }
 
-        params = packet.get("params", {})
+        params = collect_legacy_params(packet)
         pe = str(params.get("pe", "")).strip()
         pev2 = str(params.get("pev2", "")).strip()
         return {

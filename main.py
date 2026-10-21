@@ -879,7 +879,7 @@ class AutoTrackerApp(QMainWindow):
         if success:
             self.log_write("シナリオの実行が完了しました。計測データはscenario配下のシナリオ別フォルダに保存されています。\n")
         else:
-            self.log_write("シナリオの実行に失敗しました。計測結果は保存されていません。\n")
+            self.log_write("シナリオの実行が停止または失敗しました。途中結果の保存有無は上のログを確認してください。\n")
             QMessageBox.warning(
                 self,
                 "シナリオ実行エラー",

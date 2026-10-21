@@ -596,7 +596,7 @@ def generate_compare_report(
                 f"テンプレートに『{adapter.sheet_name}』シートが無いためスキップします。"
             )
 
-    if not process_targets:
+    if not process_targets and not latest_data.get("step_results"):
         supported_sheets = " / ".join(adapter.sheet_name for adapter in active_adapters)
         return logger_func(
             "処理対象のデータに対応するシートが見つかりません。"
@@ -623,6 +623,28 @@ def generate_compare_report(
             base_filename=os.path.basename(base_json_path) if compare else "",
             compare=compare
         )
+
+    if latest_data.get("step_results") or base_data.get("step_results"):
+        status_sheet = wb.create_sheet("実行結果")
+        status_sheet.append(["データ", "全体の結果", "Step", "ステップID", "操作", "対象", "操作の結果"])
+        labels = {"completed": "完了", "partial": "一部操作を確認できず", "failed": "失敗",
+                  "unconfirmed": "未確認（自動で先へ進みました）", "manual": "未確認（手動で復旧しました）"}
+        for title, data in [("最新", latest_data), ("比較元", base_data)]:
+            if not data:
+                continue
+            overall = labels.get(data.get("execution_status"), "旧形式：実行状態の記録なし")
+            status_sheet.append([title, overall])
+            for result in data.get("step_results", []):
+                row = [title, overall, result.get("step_number"), result.get("step_id"),
+                       result.get("action"), result.get("selector"), labels.get(result.get("status"), "未確認")]
+                status_sheet.append(row)
+                # Selectors are literal text, including those beginning with '='.
+                for cell in status_sheet[status_sheet.max_row]:
+                    if isinstance(cell.value, str):
+                        cell.data_type = 's'
+        status_sheet.freeze_panes = "A2"
+        for column, width in {"A": 12, "B": 28, "C": 10, "D": 18, "E": 16, "F": 65, "G": 40}.items():
+            status_sheet.column_dimensions[column].width = width
 
     try:
         wb.save(output_excel_path)

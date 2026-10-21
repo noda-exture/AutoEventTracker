@@ -3,7 +3,7 @@ const stealth = require('puppeteer-extra-plugin-stealth')();
 const fs = require('fs');
 const path = require('path');
 const { resolveRecordingViewport } = require('./recording_settings');
-const { installRecorderEvents } = require('./recorder_events');
+const { installRecorderEvents, attachRecorderToPage } = require('./recorder_events');
 
 // ステルスプラグインを有効化
 chromium.use(stealth);
@@ -192,6 +192,7 @@ const flushClosedPages = () => {
   await context.addInitScript(installRecorderEvents);
 
   context.on('page', (newPage) => {
+    attachRecorderToPage(newPage);
     const pageName = registerPage(newPage);
     console.log(`[タブ] 新しいタブ ${pageName} を検知しました`);
 

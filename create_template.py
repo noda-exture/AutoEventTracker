@@ -50,7 +50,7 @@ def create_comprehensive_template(template_path=None):
         ("pe", "web.webInteraction.type", "data.__adobe.analytics.linkType", "Link Type", "AppMeasurement: lnk_o/lnk_d/lnk_e、Data: o/d/e、XDM: other/download/exit（未変換）"),
         ("pev2", "web.webInteraction.name", "data.__adobe.analytics.linkName", "Link Name", "クリックされたリンクの名称"),
         ("pev1", "web.webInteraction.URL", "data.__adobe.analytics.linkURL", "Link URL", "クリックされたリンクのURL"),
-        ("events", "", "data.__adobe.analytics.events", "Events", "イベント一覧。XDMのcommerceやカスタムイベントとは別行で確認"),
+        ("events", "", "data.__adobe.analytics.events", "Events", "イベント一覧。Web SDKのXDMカスタムイベントをevents形式に変換（Data指定優先）"),
         ("products", "", "data.__adobe.analytics.products", "Products", "商品文字列（カテゴリ;商品;数量;金額;イベント;eVar）。XDM商品配列は別行"),
         ("purchaseID", "commerce.order.purchaseID", "data.__adobe.analytics.purchaseID", "Purchase ID", "購入の重複排除に使用するID"),
         ("xact", "commerce.order.payments[0].transactionID", "data.__adobe.analytics.transactionID", "Transaction ID", "Data Sourcesでオンライン・オフライン情報を結び付けるID"),

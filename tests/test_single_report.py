@@ -39,6 +39,25 @@ class SingleReportTests(unittest.TestCase):
                 self.assertNotIn(marker, text)
             report.close()
 
+    def test_unconfirmed_hover_is_reported_even_without_packets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            wb = Workbook()
+            wb.active.title = 'GA4'
+            wb.save(project / 'template.xlsx')
+            data = {'events': [], 'execution_status': 'partial', 'step_results': [
+                {'step_number': 1, 'step_id': '0001', 'action': 'hover',
+                 'selector': '=literal', 'status': 'unconfirmed'}]}
+            latest = project / 'latest.json'
+            latest.write_text(json.dumps(data))
+            result = generate_compare_report(str(project), str(latest), None, 'partial.xlsx', logger_func=lambda _: None)
+            report = load_workbook(result)
+            sheet = report['実行結果']
+            self.assertEqual(sheet['B3'].value, '一部操作を確認できず')
+            self.assertIn('未確認', sheet['G3'].value)
+            self.assertEqual(sheet['F3'].data_type, 's')
+            report.close()
+
     def test_toggle_disables_baseline_and_switches_output_name(self):
         app = QApplication.instance() or QApplication([])
         ui = Ui_MainWindow()

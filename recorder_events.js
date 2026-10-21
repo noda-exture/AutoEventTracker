@@ -1,6 +1,7 @@
 function installRecorderEvents() {
-      if (window.__AUTOREC_INIT) return;
-      window.__AUTOREC_INIT = true;
+      // A popup may keep its Window while replacing its initial Document.
+      // Guard the actual event-listener owner, not the lifetime of the window.
+      if (document.__AUTOREC_INIT) return;
 
       const getSelector = (el, { useText = true } = {}) => {
         const escapeAttribute = (value) => String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
@@ -216,6 +217,7 @@ function installRecorderEvents() {
       }, { capture: true, passive: true });
 
       const notifyClickFromEvent = (e) => {
+        if (!e.isTrusted) return;
         flushHover(true);
         clearTimeout(hoverTimer);
         pendingHover = null;
@@ -244,19 +246,11 @@ function installRecorderEvents() {
 
       document.addEventListener('pointerdown', (e) => {
         userScrollIntentUntil = Date.now() + 1000;
-        const path = e.composedPath();
-        const actionable = path.some((node) =>
-          node instanceof Element
-          && (node.tagName === 'A' || node.tagName === 'BUTTON'
-            || node.tagName === 'LABEL'
-            || (node.tagName === 'INPUT' && ['button', 'submit', 'radio', 'checkbox'].includes(node.type))
-            || node.getAttribute('role') === 'button')
-        );
-        if (actionable) notifyClickFromEvent(e);
       }, { capture: true, passive: true });
 
       document.addEventListener('click', notifyClickFromEvent, true);
 
+      const lastInputValues = new WeakMap();
       document.addEventListener('input', (e) => {
         const el = e.composedPath().find((node) =>
           node instanceof Element && ['SELECT', 'INPUT', 'TEXTAREA'].includes(node.tagName)
@@ -271,6 +265,7 @@ function installRecorderEvents() {
           (el.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit'].includes(el.type))
           || el.tagName === 'TEXTAREA'
         ) {
+          lastInputValues.set(el, el.value);
           void window.notifyNodeEvent({
             action: 'fill', selector, value: el.value, tag: el.tagName.toLowerCase()
           });
@@ -291,13 +286,13 @@ function installRecorderEvents() {
             value: el.value,
             tag: 'select'
           });
-        } else if (el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio')) {
-          void window.notifyNodeEvent({
-            action: 'click',
-            selector: selector,
-            tag: 'input'
-          });
+        } else if (el.tagName === 'INPUT' && ['checkbox', 'radio'].includes(el.type)) {
+          // Native clicks (including label forwarding) are recorded above.
+          // change can be trusted even when a script called input.click().
+          return;
         } else if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+          if (lastInputValues.has(el) && lastInputValues.get(el) === el.value) return;
+          lastInputValues.set(el, el.value);
           void window.notifyNodeEvent({
             action: 'fill',
             selector: selector,
@@ -325,6 +320,20 @@ function installRecorderEvents() {
           queueScrollCapture(e);
         }
       }, true);
+      document.__AUTOREC_INIT = true;
 }
 
-module.exports = { installRecorderEvents };
+function attachRecorderToPage(page, logger = console.warn) {
+  const install = frame => frame.evaluate(installRecorderEvents).catch(error => {
+    if (!page.isClosed() && !/Execution context was destroyed|Frame was detached|Target page.*closed/.test(error.message)) {
+      logger(`[記録警告] 操作監視の初期化に失敗しました: ${error.message}`);
+    }
+  });
+  page.on('framenavigated', frame => { void install(frame); });
+  page.on('domcontentloaded', () => {
+    for (const frame of page.frames()) void install(frame);
+  });
+  for (const frame of page.frames()) void install(frame);
+}
+
+module.exports = { installRecorderEvents, attachRecorderToPage };
