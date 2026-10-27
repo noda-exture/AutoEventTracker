@@ -12,6 +12,7 @@ from hover_recovery import recover_hover
 from storage_paths import measurement_output_path, safe_file_component
 from global_settings import resolve_device, device_context_options
 from measurement_adapters.adobe_analytics import legacy_request_data
+from measurement_adapters.ga4 import split_events
 
 def _safe_step_token(value):
     token = re.sub(r"[^\w-]+", "_", str(value or ""), flags=re.UNICODE).strip("_")
@@ -162,6 +163,39 @@ def wait_for_analytics_quiet(page, capture_state, quiet_ms=800, max_wait_ms=3000
         if (now - started_at) * 1000 >= max_wait_ms:
             return
         page.wait_for_timeout(100)
+
+
+def wait_for_final_analytics(context, capture_states, min_wait_ms=5000, max_wait_ms=15000,
+                             quiet_ms=1000):
+    """Keep all tabs observable through final navigation and delayed analytics."""
+    started = time.monotonic()
+    deadline = started + max_wait_ms / 1000
+    ready_since = None
+    previous_pages = None
+    while time.monotonic() < deadline:
+        pages = [page for page in context.pages if not page.is_closed()]
+        if not pages:
+            return
+        ready = True
+        for page in pages:
+            try:
+                if page.evaluate("document.readyState") != "complete":
+                    ready = False
+            except Exception:
+                ready = False  # Navigation can replace the execution context.
+        now = time.monotonic()
+        if not ready or pages != previous_pages:
+            ready_since = None
+        if ready and ready_since is None:
+            ready_since = now
+        previous_pages = pages
+        last_request = max((state.get("last_request_at") or started
+                            for state in capture_states.values()), default=started)
+        if (ready_since is not None and (now - ready_since) * 1000 >= min_wait_ms
+                and (now - last_request) * 1000 >= quiet_ms):
+            return
+        pages[0].wait_for_timeout(100)
+    print("      [警告] 最終ページの計測待機が上限に達しました。遅延通信が未取得の可能性があります。")
 
 
 def wait_for_dom_stable(page, quiet_ms=600, max_wait_ms=5000):
@@ -742,7 +776,8 @@ def run_tracker(
                     "post_data": post_data,
                     "timestamp": time.time()
                 }
-                append_analytics_log(log_entry, source_page_id)
+                for event in split_events(log_entry):
+                    append_analytics_log(event, source_page_id)
                 print("    [GA4 検知] イベントが送信されました")
 
             # ② 従来型 Adobe Analytics の通信を検知
@@ -1035,6 +1070,8 @@ def run_tracker(
                     break 
 
             if not step_error_occurred:
+                print("      [Wait] 最終ページと新しいタブの読み込み・計測通信を待っています...")
+                wait_for_final_analytics(context, page_capture_states)
                 output_data = {
                     "execution_status": "partial" if any(r["status"] != "completed" for r in step_results) else "completed",
                     "step_results": step_results,

@@ -43,11 +43,25 @@ def normalize_url(value):
         return value.split("?", 1)[0].rstrip("/")
 
 
+def split_events(packet):
+    """Expand batched request bodies without mutating the captured request."""
+    body = packet.get("post_data")
+    lines = [line for line in body.splitlines() if line.strip()] if isinstance(body, str) else []
+    if len(lines) <= 1:
+        return [packet]
+    return [dict(packet, post_data=line, batch_event_index=index)
+            for index, line in enumerate(lines)]
+
+
 class GA4Adapter(MeasurementAdapter):
     key = "GA4"
     sheet_name = "GA4"
     display_name = "GA4"
     aliases = ("google analytics 4",)
+
+    def filter_events(self, events):
+        return [item for event in events if self.matches_event(event)
+                for item in split_events(event)]
 
     def discover_mappings(self, packets, existing):
         known = {row['source_key'] for row in existing}
