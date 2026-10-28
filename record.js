@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { resolveRecordingViewport } = require('./recording_settings');
 const { installRecorderEvents, attachRecorderToPage } = require('./recorder_events');
+const { measurementPacket } = require('./recording_measurements');
 
 // ステルスプラグインを有効化
 chromium.use(stealth);
@@ -81,6 +82,15 @@ const flushClosedPages = () => {
 
   const browser = await chromium.launch({ headless: false });
   const context = await browser.newContext({ viewport });
+  const measurements = [];
+  context.on('request', request => {
+    try {
+      const packet = measurementPacket(request, measurements.length + 1);
+      if (packet) measurements.push(packet);
+    } catch (error) {
+      console.error(`計測通信の取得エラー: ${error.message}`);
+    }
+  });
 
   //  【修正】保存処理を内部に移動し、browser.close() を確実に呼べるようにする
   const saveScenario = async () => {
@@ -120,6 +130,30 @@ const flushClosedPages = () => {
       console.log(`保存成功: ${savePath}`);
     } catch (err) {
       console.error(`保存エラー: ${err.message}`);
+      process.exitCode = 1;
+    }
+
+    try {
+      const now = new Date();
+      const stamp = now.toISOString().replace(/[-:.TZ]/g, '');
+      const measurementPath = path.join(scenarioDir, `${scenarioName}_recording_${stamp}.json`);
+      fs.writeFileSync(measurementPath, JSON.stringify({
+        schema_version: 2,
+        capture_source: 'recording',
+        step_capture_mode: 'none',
+        project: proj,
+        scenario: safeFileName,
+        scenario_name: scenarioName,
+        scenario_start_url: startUrl,
+        captured_at: now.toISOString(),
+        memo: finalMemo,
+        total_events_captured: measurements.length,
+        events: measurements,
+      }, null, 2), 'utf-8');
+      console.log(`計測データ保存成功（${measurements.length}通信）: ${measurementPath}`);
+    } catch (err) {
+      console.error(`計測データ保存エラー: ${err.message}`);
+      process.exitCode = 1;
     }
     
     //  【重要】残存するChromeプロセスを完全にキルする
@@ -132,7 +166,7 @@ const flushClosedPages = () => {
     }
     
     // Nodeプロセスを終了
-    process.exit(0);
+    process.exit(process.exitCode || 0);
   };
 
   await context.exposeBinding('notifyNodeEvent', ({ page }, eventData) => {

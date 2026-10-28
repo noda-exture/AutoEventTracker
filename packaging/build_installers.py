@@ -71,7 +71,10 @@ def main():
     mac = sys.platform == 'darwin'
     app_root = ROOT / 'dist' / ('AutoEventTracker.app' if mac else 'AutoEventTracker')
     resource_root = app_root / ('Contents/Resources' if mac else '_internal')
-    shutil.copytree(browsers, resource_root / 'browsers', dirs_exist_ok=True, symlinks=True,
+    bundled_browsers = resource_root / 'browsers'
+    if bundled_browsers.exists():
+        shutil.rmtree(bundled_browsers)
+    shutil.copytree(browsers, bundled_browsers, symlinks=True,
                     ignore=shutil.ignore_patterns('.links', '.DS_Store'))
     if mac:
         link = app_root / 'Contents' / 'Frameworks' / 'browsers'
@@ -96,17 +99,19 @@ def main():
             raise RuntimeError('Bundled application self-test failed')
     if mac:
         installer = installers / f'AutoEventTracker-{VERSION}-macos-{platform.machine()}.pkg'
-        package_root = ROOT / 'build' / 'pkg-root'
-        shutil.copytree(app_root, package_root / 'Applications' / app_root.name, dirs_exist_ok=True, symlinks=True)
-        components = ROOT / 'build' / 'components.plist'
-        run(['pkgbuild', '--analyze', '--root', package_root, components])
-        data = plistlib.loads(components.read_bytes())
-        for component in data:
-            component['BundleIsRelocatable'] = False
-        components.write_bytes(plistlib.dumps(data))
-        run(['pkgbuild', '--root', package_root, '--component-plist', components,
-             '--identifier', 'com.exture.autoeventtracker', '--version', VERSION,
-             '--install-location', '/', installer])
+        # A fresh staging root avoids stale files and existing symlink conflicts.
+        with tempfile.TemporaryDirectory(prefix='pkg-stage-', dir=ROOT / 'build') as temp:
+            package_root = Path(temp) / 'root'
+            shutil.copytree(app_root, package_root / 'Applications' / app_root.name, symlinks=True)
+            components = Path(temp) / 'components.plist'
+            run(['pkgbuild', '--analyze', '--root', package_root, components])
+            data = plistlib.loads(components.read_bytes())
+            for component in data:
+                component['BundleIsRelocatable'] = False
+            components.write_bytes(plistlib.dumps(data))
+            run(['pkgbuild', '--root', package_root, '--component-plist', components,
+                 '--identifier', 'com.exture.autoeventtracker', '--version', VERSION,
+                 '--install-location', '/', installer])
         listing = subprocess.check_output(['pkgutil', '--payload-files', str(installer)], text=True)
         if any('project' in Path(line).parts for line in listing.splitlines()):
             raise RuntimeError('Project directory found in package payload')

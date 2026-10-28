@@ -261,7 +261,7 @@ def align_step_groups(events_new, events_old):
 def packet_display_name(packet, target_type):
     return get_adapter(target_type).packet_display_name(packet)
 
-def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename, base_filename, compare=True):
+def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename, base_filename, compare=True, recording=False):
     ex_set = config["excel_setting"]
     ext_rules = config["extraction_rules"]
     replace_placeholders_in_sheet(ws, config)
@@ -351,9 +351,13 @@ def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename
     current_col = START_DATA_COL
     total_output_cols = 0
     aligned_steps = align_step_groups(ev_new, ev_old)
+    if recording:
+        aligned_steps = [{"step_index": 0, "new": ev_new, "old": []}]
 
     for step_group in aligned_steps:
         packet_pairs = match_packets_in_step(step_group["new"], step_group["old"], adapter)
+        if recording:
+            packet_pairs = [(packet, None, None) for packet in ev_new]
         if not packet_pairs:
             continue
 
@@ -364,6 +368,8 @@ def process_single_sheet(ws, sheet_name, ev_new, ev_old, config, latest_filename
             display_packet = p_new or p_old
             packet_name = adapter.packet_display_name(display_packet)
             p_label = f"{step_label}-{p_idx + 1}\n{packet_name}"
+            if recording:
+                p_label = f"通信 {display_packet.get('capture_sequence', p_idx + 1)}\n{packet_name}"
             if compare and p_new and not p_old:
                 p_label += "\n[最新のみ]"
             elif compare and p_old and not p_new:
@@ -568,6 +574,11 @@ def generate_compare_report(
 
     latest_events = latest_data.get("events", [])
     base_events = base_data.get("events", [])
+    recording = latest_data.get("capture_source") == "recording"
+    if compare and (recording or base_data.get("capture_source") == "recording"):
+        return logger_func("シナリオ作成時の計測データは操作に紐付いていません。比較をオフにして一覧レポートを生成してください。")
+    if recording and not latest_events:
+        return logger_func("シナリオ作成中に対象の計測通信は取得されませんでした。")
 
     latest_scenario = latest_data.get("scenario")
     base_scenario = base_data.get("scenario")
@@ -621,7 +632,8 @@ def generate_compare_report(
             config=config,
             latest_filename=os.path.basename(latest_json_path),
             base_filename=os.path.basename(base_json_path) if compare else "",
-            compare=compare
+            compare=compare,
+            recording=recording
         )
 
     if latest_data.get("step_results") or base_data.get("step_results"):

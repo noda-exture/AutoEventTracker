@@ -935,6 +935,7 @@ class AutoTrackerApp(QMainWindow):
         self.log_write("==================================================\n")
         if success:
             self.log_write("シナリオを保存しました。「シナリオ実行」タブから確認できます。\n")
+            self.log_write("計測JSONも同じフォルダーに保存しました。「レポート生成」で recording を含むJSONを選び、比較をオフにして一覧を出力できます。\n")
             self.update_scenario_list(proj)
         else:
             self.log_write("レコーダーが終了しましたが、エラーが発生した可能性があります。\n")

@@ -39,6 +39,38 @@ class SingleReportTests(unittest.TestCase):
                 self.assertNotIn(marker, text)
             report.close()
 
+    def test_recording_report_preserves_receive_order_and_rejects_comparison(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory)
+            wb = Workbook()
+            wb.active.title = 'GA4'
+            wb.active.append([])
+            wb.active.append(['GA4パラメータ', '種別', '型', '項目', '説明'])
+            wb.active.append(['en', '', '', 'イベント名', ''])
+            wb.save(project / 'template.xlsx')
+            data = {'capture_source': 'recording', 'events': [
+                {'type': 'GA4', 'capture_sequence': 1, 'timestamp': 2,
+                 'url': 'https://www.google-analytics.com/g/collect?tid=G-T',
+                 'post_data': 'en=first\nen=second'},
+                {'type': 'GA4', 'capture_sequence': 2, 'timestamp': 1,
+                 'params': {'en': 'third'}}]}
+            latest = project / 'recording.json'
+            latest.write_text(json.dumps(data))
+            result = generate_compare_report(str(project), str(latest), None, 'recording.xlsx')
+            report = load_workbook(result)
+            sheet = report['GA4']
+            self.assertEqual([sheet.cell(3, col).value for col in (6, 7, 8)],
+                             ['first', 'second', 'third'])
+            self.assertTrue(sheet['F2'].value.startswith('通信 1'))
+            self.assertTrue(sheet['H2'].value.startswith('通信 2'))
+            self.assertNotIn('Step', sheet['F2'].value)
+            self.assertNotIn('実行結果', report.sheetnames)
+            report.close()
+            logs = []
+            generate_compare_report(str(project), str(latest), str(latest), 'compare.xlsx', logs.append)
+            self.assertIn('比較をオフ', logs[-1])
+            self.assertFalse((project / 'outputs' / 'compare.xlsx').exists())
+
     def test_unconfirmed_hover_is_reported_even_without_packets(self):
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory)

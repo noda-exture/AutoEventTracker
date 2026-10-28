@@ -6,7 +6,7 @@ root = Path(SPECPATH).parent
 stage = root / 'build' / 'installer-resources'
 resources = [
     (str(root / name), '.') for name in
-    ('global_config.json', 'styles.qss', 'record.js', 'recorder_events.js', 'recording_settings.js')
+    ('global_config.json', 'styles.qss', 'record.js', 'recorder_events.js', 'recording_settings.js', 'recording_measurements.js')
 ]
 resources += [
     (str(root / 'assets' / 'autoeventtracker-icon-v2.png'), 'assets'),
